@@ -20,7 +20,8 @@ pub(crate) struct Particle {
     pub peak_alpha: f32,
     pub end_alpha: f32,
     /// Base color captured at spawn time (normalized 0..1 RGB), used as-is
-    /// for `ColorMode::Single` / `ColorMode::MultiPalette`.
+    /// for `ColorMode::Single` / `ColorMode::MultiPalette` (without stops)
+    /// and `ColorMode::RandomPalette` (the stop it was dealt).
     pub color_rgb: [f32; 3],
     pub hue: f32,
     pub life: f32,

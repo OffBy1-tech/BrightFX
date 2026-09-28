@@ -106,7 +106,8 @@ const _: () = assert!(std::mem::size_of::<ParticleInstance>() == 32);
 
 pub struct Simulation {
     config: ParticleFxConfig,
-    /// `config.color_stops` parsed and sorted for `ColorMode::MultiPalette`.
+    /// `config.color_stops` parsed and sorted for `ColorMode::MultiPalette`
+    /// and `ColorMode::RandomPalette`.
     /// Empty when the config carries no stops. Derived from `config`, so it
     /// is rebuilt wherever `config` is replaced.
     palette: Palette,
@@ -480,10 +481,15 @@ impl Simulation {
             .range(self.config.lifetime_min, self.config.lifetime_max);
 
         self.global_hue = (self.global_hue + self.config.rainbow_speed * 0.5) % 360.0;
-        let color_rgb = if self.config.color_mode == ColorMode::RainbowCycle {
-            hsl_to_rgb(self.global_hue, 0.9, 0.6)
-        } else {
-            hex_to_rgb(&self.config.primary_color)
+        // The palette pick draws from the RNG only in its own mode, so every
+        // other mode keeps the random sequence it has always had.
+        let color_rgb = match self.config.color_mode {
+            ColorMode::RainbowCycle => hsl_to_rgb(self.global_hue, 0.9, 0.6),
+            ColorMode::RandomPalette if !self.palette.is_empty() => {
+                let i = (self.rng.f32() * self.palette.len() as f32) as usize;
+                self.palette[i.min(self.palette.len() - 1)].1
+            }
+            _ => hex_to_rgb(&self.config.primary_color),
         };
 
         let rotation_speed = self
@@ -543,7 +549,7 @@ impl Simulation {
                     interpolate_hex(primary, accent, speed_ratio)
                 }
                 ColorMode::MultiPalette if !palette.is_empty() => sample_palette(palette, progress),
-                ColorMode::Single | ColorMode::MultiPalette => p.color_rgb,
+                ColorMode::Single | ColorMode::MultiPalette | ColorMode::RandomPalette => p.color_rgb,
             };
 
             self.buffer.push(ParticleInstance {
@@ -1012,6 +1018,83 @@ mod tests {
 
         assert!(fresh.particle_count() > 0, "test is vacuous with no particles");
         assert_eq!(fresh.buffer().to_vec(), rewound.buffer().to_vec());
+    }
+
+    fn random_palette_config(stops: Option<Vec<ColorStop>>) -> ParticleFxConfig {
+        let mut config = base_config();
+        config.emitter.spawn_burst_size = 40;
+        config.lifetime_min = 100.0;
+        config.lifetime_max = 100.0;
+        config.color_mode = ColorMode::RandomPalette;
+        config.primary_color = "#ffffff".into();
+        config.color_stops = stops;
+        config
+    }
+
+    fn colors(sim: &Simulation) -> Vec<[f32; 3]> {
+        sim.buffer().iter().map(|p| [p.color[0], p.color[1], p.color[2]]).collect()
+    }
+
+    #[test]
+    fn random_palette_gives_each_particle_one_stop_and_holds_it_for_life() {
+        let stops = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let mut sim = Simulation::new(
+            random_palette_config(Some(vec![
+                stop(0.0, "#ff0000"),
+                stop(0.5, "#00ff00"),
+                stop(1.0, "#0000ff"),
+            ])),
+            3,
+        );
+        sim.trigger_burst();
+        sim.advance(TICK);
+        let born = colors(&sim);
+        assert_eq!(born.len(), 40);
+        for c in &born {
+            assert!(stops.contains(c), "{c:?} is not a stop, so it was interpolated");
+        }
+        // Every stop is used: offsets do not weight the pick.
+        for s in &stops {
+            assert!(born.contains(s), "stop {s:?} never picked out of 40");
+        }
+        // Unlike multi-palette, the colour does not move with progress.
+        for _ in 0..80 {
+            sim.advance(TICK);
+        }
+        assert_eq!(colors(&sim), born);
+    }
+
+    #[test]
+    fn random_palette_without_stops_uses_the_primary_color() {
+        for stops in [None, Some(vec![])] {
+            let mut sim = Simulation::new(random_palette_config(stops), 3);
+            sim.trigger_burst();
+            sim.advance(TICK);
+            assert!(colors(&sim).iter().all(|c| *c == [1.0, 1.0, 1.0]));
+        }
+    }
+
+    #[test]
+    fn random_palette_is_deterministic_under_seek() {
+        // The pick comes from the seeded RNG at spawn, so a replay must
+        // land every particle on the same stop, by either route.
+        let mut config = track_config();
+        config.emitter.spawn_burst_size = 30;
+        config.lifetime_min = 100.0;
+        config.lifetime_max = 100.0;
+        config.color_mode = ColorMode::RandomPalette;
+        config.color_stops = Some(vec![stop(0.0, "#ff0000"), stop(0.5, "#00ff00"), stop(1.0, "#0000ff")]);
+
+        let mut fresh = Simulation::new(config.clone(), 5);
+        fresh.seek(0.9);
+        let mut rewound = Simulation::new(config, 5);
+        rewound.seek(0.95);
+        rewound.seek(0.6);
+        rewound.seek(0.9);
+
+        assert_eq!(fresh.particle_count(), 30, "test is vacuous without the burst");
+        assert_eq!(fresh.buffer().to_vec(), rewound.buffer().to_vec());
+        assert!(colors(&fresh).windows(2).any(|w| w[0] != w[1]), "every particle got one stop");
     }
 
     #[test]

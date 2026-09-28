@@ -51,6 +51,9 @@ pub enum ColorMode {
     RainbowCycle,
     SpeedResponsive,
     MultiPalette,
+    /// Each particle takes one `color_stops` entry at spawn, picked
+    /// uniformly by the seeded RNG, and keeps it for life.
+    RandomPalette,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
