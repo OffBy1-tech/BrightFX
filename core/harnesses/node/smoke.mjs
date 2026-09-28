@@ -48,13 +48,11 @@ function assertBufferMatches(sim, { particleCount, buffer, tolerance }) {
   const actual = readBuffer(sim, mod);
   assert.equal(actual.length, buffer.length, "buffer length diverged");
   for (let i = 0; i < actual.length; i++) {
-    // Checked on its own so the property does not hang on the comparison
-    // below happening to be written in the NaN-failing direction.
-    assert.ok(Number.isFinite(actual[i]), `float ${i} is not finite: ${actual[i]}`);
-    assert.ok(
-      Math.abs(actual[i] - buffer[i]) <= tolerance,
-      `float ${i} drifted: got ${actual[i]}, expected ${buffer[i]}`,
-    );
+    // Finiteness is checked explicitly rather than left to the comparison
+    // happening to be written in the NaN-failing direction. The message is
+    // only built on failure: this loop runs over every float.
+    const ok = Number.isFinite(actual[i]) && Number.isFinite(buffer[i]) && Math.abs(actual[i] - buffer[i]) <= tolerance;
+    if (!ok) assert.fail(`float ${i} drifted or is not finite: got ${actual[i]}, expected ${buffer[i]}`);
   }
 }
 
@@ -100,11 +98,12 @@ test("forward seeks reproduce the Rust buffer and match a fresh seek exactly", (
   const fresh = new mod.BrightFx(BigInt(seekForwardExpected.seed));
   applyConfig(fresh, seekConfigJson);
   fresh.seek(seekForwardExpected.seekTimes.at(-1));
-  // Same binary, same steps: bit-identical, no tolerance. `deepEqual`
-  // treats NaN as equal to NaN, so finiteness is asserted separately.
+  // Same binary, same steps: bit-identical, no tolerance. `deepStrictEqual`
+  // compares with `Object.is`, so -0 and +0 differ as they do bitwise; it
+  // also treats NaN as equal to NaN, so finiteness is asserted separately.
   const freshFloats = Array.from(readBuffer(fresh, mod));
   assert.ok(freshFloats.every(Number.isFinite), "fresh-seek buffer is not finite");
-  assert.deepEqual(freshFloats, Array.from(readBuffer(forward, mod)));
+  assert.deepStrictEqual(freshFloats, Array.from(readBuffer(forward, mod)));
   fresh.free();
   forward.free();
 });

@@ -161,8 +161,10 @@ internal static class Program
     }
 
     /// Compares the live particle buffer against a recorded one within tolerance.
-    /// A non-finite float fails outright: `Math.Abs(a - b) > tolerance` is
-    /// false for NaN, so a NaN in both buffers would otherwise pass.
+    /// A non-finite float on either side fails outright: `Math.Abs(a - b) >
+    /// tolerance` is false whenever either operand is NaN. At tolerance 0 the
+    /// property is "bit-identical", so the bit patterns are compared -- that
+    /// is the only way -0.0 and +0.0 differ.
     private static void AssertBufferMatches(IntPtr sim, uint expectedCount, uint stride, float[] expected, float tolerance)
     {
         uint count = Native.bfx_particle_count(sim);
@@ -175,9 +177,13 @@ internal static class Program
         if (actual.Length != expected.Length) Fail($"buffer length diverged: {actual.Length} vs {expected.Length}");
         for (int index = 0; index < actual.Length; index++)
         {
-            if (!float.IsFinite(actual[index])) Fail($"float {index} is not finite: {actual[index]}");
-            if (Math.Abs(actual[index] - expected[index]) > tolerance)
-                Fail($"float {index} drifted: got {actual[index]}, expected {expected[index]}");
+            float got = actual[index], wanted = expected[index];
+            if (!float.IsFinite(got) || !float.IsFinite(wanted))
+                Fail($"float {index} is not finite: got {got}, expected {wanted}");
+            bool differs = tolerance == 0f
+                ? BitConverter.SingleToInt32Bits(got) != BitConverter.SingleToInt32Bits(wanted)
+                : Math.Abs(got - wanted) > tolerance;
+            if (differs) Fail($"float {index} drifted: got {got}, expected {wanted}");
         }
     }
 

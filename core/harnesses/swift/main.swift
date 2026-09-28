@@ -79,8 +79,10 @@ func drive(_ sim: OpaquePointer, frames: [EmitterFrame], burstFrame: Int, dt: Fl
 }
 
 /// Compares the live particle buffer against a recorded one within tolerance.
-/// A non-finite float fails outright: `abs(a - b) > tolerance` is false
-/// for NaN, so a NaN in both buffers would otherwise pass.
+/// A non-finite float on either side fails outright: `abs(a - b) >
+/// tolerance` is false whenever either operand is NaN. At tolerance 0 the
+/// property is "bit-identical", so the bit patterns are compared -- that
+/// is the only way -0.0 and +0.0 differ.
 func assertBufferMatches(
     _ sim: OpaquePointer, count expectedCount: UInt32, stride: UInt32, buffer expected: [Float], tolerance: Float
 ) throws {
@@ -93,11 +95,13 @@ func assertBufferMatches(
     guard actual.count == expected.count else {
         throw Failure("buffer length diverged: \(actual.count) vs \(expected.count)")
     }
-    if let index = actual.firstIndex(where: { !$0.isFinite }) {
-        throw Failure("float \(index) is not finite: \(actual[index])")
-    }
-    for index in 0..<actual.count where abs(actual[index] - expected[index]) > tolerance {
-        throw Failure("float \(index) drifted: got \(actual[index]), expected \(expected[index])")
+    for index in 0..<actual.count {
+        let (got, wanted) = (actual[index], expected[index])
+        guard got.isFinite, wanted.isFinite else {
+            throw Failure("float \(index) is not finite: got \(got), expected \(wanted)")
+        }
+        let differs = tolerance == 0 ? got.bitPattern != wanted.bitPattern : abs(got - wanted) > tolerance
+        if differs { throw Failure("float \(index) drifted: got \(got), expected \(wanted)") }
     }
 }
 
