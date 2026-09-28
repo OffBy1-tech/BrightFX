@@ -34,18 +34,18 @@ pub fn fixtures_dir() -> PathBuf {
 /// empty value cannot quietly turn a verify run into a re-baseline.
 #[allow(dead_code)]
 pub fn regenerating() -> bool {
-    match std::env::var("BRIGHTFX_REGENERATE") {
-        Ok(value) if value == "1" => true,
-        Ok(value) => {
-            // Once per test binary: several fixtures may ask.
-            static WARNED: std::sync::Once = std::sync::Once::new();
-            WARNED.call_once(|| {
-                eprintln!("BRIGHTFX_REGENERATE={value:?} is ignored and the fixtures are verified; only =1 regenerates")
-            });
-            false
-        }
-        Err(_) => false,
-    }
+    let value = match std::env::var("BRIGHTFX_REGENERATE") {
+        Ok(value) if value == "1" => return true,
+        Ok(value) => format!("{value:?}"),
+        Err(std::env::VarError::NotUnicode(value)) => format!("{value:?} (not UTF-8)"),
+        Err(std::env::VarError::NotPresent) => return false,
+    };
+    // Once per test binary: several fixtures may ask.
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        eprintln!("BRIGHTFX_REGENERATE={value} is ignored and the fixtures are verified; only =1 regenerates")
+    });
+    false
 }
 
 /// The recorded expectation at `path`, or `None` after rewriting it from
@@ -64,9 +64,11 @@ pub fn load_or_regenerate(path: &Path, record: impl FnOnce() -> serde_json::Valu
 
 /// Every float's bit pattern. "Bit-identical" compares these rather than
 /// the floats: f32 `==` holds for -0.0 against +0.0, and the harnesses
-/// compare bitwise, so the Rust side has to as well.
+/// compare bitwise, so the Rust side has to as well. Asserts every float is
+/// finite first, since two identical NaNs have identical bits.
 #[allow(dead_code)]
 pub fn bits(floats: &[f32]) -> Vec<u32> {
+    assert!(floats.iter().all(|f| f.is_finite()), "buffer contains NaN or inf");
     floats.iter().map(|f| f.to_bits()).collect()
 }
 
