@@ -49,7 +49,11 @@ fn grid_tolerance(target: f32) -> f64 {
 /// Rounding up rather than down is what makes the contract "nothing
 /// authored at or before `target` is still pending": an off-grid host
 /// (24 fps frames never land on the 1/60 grid) would otherwise see every
-/// trigger one frame late.
+/// trigger one frame late. The snap keeps that contract even when it
+/// rounds down: a trigger authored between the grid point and `target`
+/// is nearer the point than `target` is, so it snaps to the same step and
+/// has fired. What a downward snap does move is the particle state, which
+/// then sits slightly *before* `target` -- see `seek`.
 fn grid_step(target: f32) -> u32 {
     let steps = target as f64 * GRID_RATE;
     let nearest = steps.round();
@@ -130,9 +134,9 @@ pub struct Simulation {
     emitter_active: bool,
     buffer: Vec<ParticleInstance>,
     /// Whole steps applied since the last reset in baked mode. `None`
-    /// whenever the pool is not the product of a pure replay -- after
-    /// `advance`, `trigger_burst`, `set_emitter`, or `set_config` -- so
-    /// the next `seek` replays from zero.
+    /// whenever the pool is not the product of a pure replay, so the next
+    /// `seek` replays from zero. Only `seek` sets it; everything else
+    /// clears it through `leave_baked`.
     baked: Option<u32>,
 }
 
@@ -168,7 +172,7 @@ impl Simulation {
         self.config = config;
         // Live particles keep their state (that is the boundary's contract),
         // but the track may have changed, so the next seek replays.
-        self.baked = None;
+        self.leave_baked();
     }
 
     /// Sets the emitter's position, velocity, and active state.
@@ -183,7 +187,7 @@ impl Simulation {
     /// under the track, so the next `seek` must replay and re-sample it
     /// rather than step forward from a state the track did not produce.
     pub fn set_emitter(&mut self, x: f32, y: f32, vx: f32, vy: f32, active: bool) {
-        self.baked = None;
+        self.leave_baked();
         self.place_emitter(x, y, vx, vy, active);
     }
 
@@ -203,7 +207,7 @@ impl Simulation {
     }
 
     pub fn trigger_burst(&mut self) {
-        self.baked = None;
+        self.leave_baked();
         self.spawn_burst();
     }
 
@@ -218,7 +222,7 @@ impl Simulation {
     }
 
     pub fn advance(&mut self, dt: f32) {
-        self.baked = None;
+        self.leave_baked();
         self.step(dt);
     }
 
@@ -240,8 +244,19 @@ impl Simulation {
         &self.config.name
     }
 
-    fn reset(&mut self) {
+    /// Drops the baked position, so the next `seek` replays from zero
+    /// instead of stepping forward. The one place `baked` is cleared. By
+    /// convention -- nothing enforces it -- every host-facing call that
+    /// changes simulation state calls this: `set_emitter`, `trigger_burst`,
+    /// and `advance` before their own writes, `set_config` after swapping
+    /// the config, and `reset`. A new such call must do the same, or a
+    /// forward seek would step on from a state the track did not produce.
+    fn leave_baked(&mut self) {
         self.baked = None;
+    }
+
+    fn reset(&mut self) {
+        self.leave_baked();
         self.pool.clear();
         self.rng = Rng::new(self.seed);
         self.spawn_budget = 0.0;
@@ -266,6 +281,12 @@ impl Simulation {
     /// trigger authored at the very end of a track fires even though no
     /// frame time lands exactly on an off-grid duration.
     ///
+    /// The snap tolerance grows with `time`, so a `time` just *after* a
+    /// grid point can snap down to it and the particle state sits before
+    /// `time` -- by at most 80 µs, the tolerance at the 600 s cap.
+    /// Triggers are unaffected (see `grid_step`). In practice only NTSC
+    /// rates hit this, late in a track; the crate README has the onsets.
+    ///
     /// If the last call was a seek to an earlier or equal grid step, only
     /// the steps in between are applied; otherwise the simulation resets
     /// and replays from t=0. Both paths run the same whole steps from a
@@ -289,10 +310,8 @@ impl Simulation {
 
         // On the forward path the `active` the loop starts from is
         // `self.emitter_active` as the previous seek left it. That is
-        // sound because every other writer of `emitter_active`
-        // (`set_emitter`, `advance`, `trigger_burst`, `set_config`,
-        // `reset`) clears `self.baked` first, so a cursor can only
-        // survive a pure replay.
+        // sound because every other writer of `emitter_active` calls
+        // `leave_baked` first, so a cursor can only survive a pure replay.
         let from = match self.baked {
             Some(step) if step <= n => step,
             _ => {
@@ -316,17 +335,7 @@ impl Simulation {
             let active = self.emitter_active;
             self.place_emitter(x, y, vx, vy, active);
 
-            // Each trigger names exactly one step, so there is no
-            // bookkeeping of what has fired.
-            for trig in &track.triggers {
-                if trig.fire_step == k + 1 {
-                    match trig.kind {
-                        TriggerKind::Burst => self.spawn_burst(),
-                        TriggerKind::StartContinuous => self.emitter_active = true,
-                        TriggerKind::StopContinuous => self.emitter_active = false,
-                    }
-                }
-            }
+            self.fire_triggers(&track, k + 1);
 
             self.step(PLAYBACK_STEP);
         }
@@ -342,8 +351,15 @@ impl Simulation {
         self.reset();
         let (x0, y0, vx0, vy0) = sample_track(&track.keyframes, 0.0);
         self.place_emitter(x0, y0, vx0, vy0, false);
+        self.fire_triggers(track, 0);
+    }
+
+    /// Applies the triggers that fire in `step`, in time order. Each
+    /// trigger names exactly one step, so there is no bookkeeping of what
+    /// has fired.
+    fn fire_triggers(&mut self, track: &BakedTrack, step: u32) {
         for trig in &track.triggers {
-            if trig.fire_step == 0 {
+            if trig.fire_step == step {
                 match trig.kind {
                     TriggerKind::Burst => self.spawn_burst(),
                     TriggerKind::StartContinuous => self.emitter_active = true,
@@ -1011,7 +1027,20 @@ mod tests {
         rewound.seek(0.5);
 
         assert!(fresh.particle_count() > 0, "test is vacuous with no particles");
-        assert_eq!(fresh.buffer().to_vec(), rewound.buffer().to_vec());
+        // Bitwise, so -0.0 and +0.0 count as different, as they do to the
+        // harnesses, and finite first, since identical NaNs share bits.
+        // Read as the flat floats a host sees, so every field is covered.
+        let bits = |sim: &Simulation| -> Vec<u32> {
+            let buffer = sim.buffer();
+            let len = std::mem::size_of_val(buffer) / std::mem::size_of::<f32>();
+            // SAFETY: `ParticleInstance` is `#[repr(C)]` and all `f32` (its
+            // stride is asserted at compile time), so this is `len`
+            // initialized, aligned f32s.
+            let floats = unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<f32>(), len) };
+            assert!(floats.iter().all(|f| f.is_finite()), "buffer contains NaN or inf");
+            floats.iter().map(|f| f.to_bits()).collect()
+        };
+        assert_eq!(bits(&fresh), bits(&rewound));
     }
 
     #[test]

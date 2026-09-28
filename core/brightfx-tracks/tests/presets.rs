@@ -174,7 +174,7 @@ fn render_golden(config: &brightfx_core::ParticleFxConfig) -> Vec<u8> {
 #[test]
 fn golden_frames_match() {
     std::fs::create_dir_all(golden_dir()).unwrap();
-    let regenerate = std::env::var("BRIGHTFX_REGENERATE").is_ok();
+    let regenerate = std::env::var("BRIGHTFX_REGENERATE").as_deref() == Ok("1");
     for (name, config) in library() {
         let frame = render_golden(&config);
         let path = golden_dir().join(format!("{name}.rgba"));
