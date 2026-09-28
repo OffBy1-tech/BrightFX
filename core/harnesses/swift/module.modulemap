@@ -1,0 +1,4 @@
+module CBrightFX {
+    header "brightfx.h"
+    export *
+}

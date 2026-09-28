@@ -1,0 +1,22 @@
+{
+  "name": "brightfx-js",
+  "version": "0.1.0",
+  "description": "Typed wrapper over the BrightFX wasm build: seek, render, straight-alpha frames, particle views",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./brightfx_wasm_bg.wasm": "./wasm/brightfx_wasm_bg.wasm"
+  },
+  "files": ["dist", "wasm", "README.md"],
+  "scripts": {
+    "sync-wasm": "node scripts/sync-wasm.mjs",
+    "build": "npm run sync-wasm && tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}

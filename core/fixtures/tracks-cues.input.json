@@ -1,0 +1,21 @@
+{
+  "cues": [
+    { "t": [24.335, 27.047], "text": "Donut Rex says, \"Everybody's here!", "who": "dino-donut-rex", "mood": "verse" },
+    { "t": [27.047, 30.0], "text": "Puppies, pirates, dinos — give a cheer!\"", "who": "dino-donut-rex", "mood": "verse" },
+    { "t": [32.472, 34.835], "text": "One, two, three — let the rock begin!", "who": "bopasaurus", "mood": "verse" },
+    { "t": [35.185, 37.899], "text": "Woah! oh! oh! Rock the valley!", "who": "lineup", "mood": "chorus" },
+    { "t": [37.899, 40.531], "text": "Woah! oh! oh! Everybody sing!", "who": "lineup", "mood": "chorus" },
+    { "t": [45.878, 48.59], "text": "Puppies in the house? — WOOF WOOF!", "who": "puppies", "mood": "rollcall" }
+  ],
+  "layout": {
+    "cards": {
+      "dino-donut-rex": { "x": 960, "y": 486 },
+      "bopasaurus": { "x": 960, "y": 486 }
+    },
+    "lineup": { "x": 960, "y": 507.6 },
+    "accent": { "dino-donut-rex": "#37A24A", "bopasaurus": "#9B59B6", "lineup": "#E8632A", "hero": "#9B59B6" },
+    "lineupTokens": ["lineup", "puppies", "pirates", "dinos"]
+  },
+  "duration": 153.312,
+  "heroTimes": [67.0]
+}

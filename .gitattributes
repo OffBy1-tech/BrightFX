@@ -1,0 +1,6 @@
+# The cue fixture is compared byte for byte (Rust records it, the Node harness
+# requires the identical string), and the preset library will be once it lands
+# at presets/ (phase-1 plan, Task 10). Never convert line endings at checkout:
+# a CRLF checkout on Windows would make every byte-exact comparison fail there.
+core/fixtures/** -text
+presets/** -text

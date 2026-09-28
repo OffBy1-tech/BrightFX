@@ -1,0 +1,16 @@
+[package]
+name = "brightfx-tracks"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Emitter-track generators for BrightFX: timing data in, baked tracks out"
+
+[dependencies]
+brightfx-core = { path = "../brightfx-core", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+# The golden-frame test in tests/presets.rs rasterizes each preset, which
+# needs the core's optional software renderer.
+brightfx-core = { path = "../brightfx-core", features = ["render"] }

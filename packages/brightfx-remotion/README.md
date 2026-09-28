@@ -1,0 +1,90 @@
+# brightfx-remotion
+
+A Remotion component that drives a BrightFX effect from Remotion's frame
+clock. No behavior of its own — what the particles do is decided by the
+effect config, the core, and the tracks crate — just the glue between
+`useCurrentFrame()`/`useVideoConfig()` and the wrapper's `seek`/`render`.
+
+## Install
+
+Not on the npm registry yet, and `brightfx-remotion` depends on
+`brightfx-js@^0.1.0`, which also isn't on the registry — npm can't resolve
+that dependency from a lone `brightfx-remotion` tarball, so install both
+tarballs **in the same `npm install` command**:
+
+```bash
+npm install ./vendor/brightfx-js-0.1.0.tgz ./vendor/brightfx-remotion-0.1.0.tgz
+```
+
+Then copy (never symlink) the wasm binary into your `public/` directory,
+where `staticFile(DEFAULT_WASM_PATH)` expects it:
+
+```bash
+mkdir -p public/brightfx
+cp node_modules/brightfx-js/wasm/brightfx_wasm_bg.wasm public/brightfx/brightfx_wasm_bg.wasm
+```
+
+## `remotion.config.ts`
+
+Add this webpack override, verbatim:
+
+```ts
+import { Config } from "@remotion/cli/config";
+
+// The wrapper's wasm glue references its binary with `new URL(..., import.meta.url)`
+// for the default path we never take. Leave it as an asset rather than a
+// WebAssembly module so webpack does not try to instantiate it at bundle time.
+Config.overrideWebpackConfig((config) => ({
+  ...config,
+  experiments: { ...(config.experiments ?? {}), asyncWebAssembly: false, syncWebAssembly: false },
+  module: {
+    ...config.module,
+    rules: [...(config.module?.rules ?? []), { test: /\.wasm$/, type: "asset/resource" }],
+  },
+}));
+```
+
+Without it, webpack tries to treat the `.wasm` import as a WebAssembly
+module to instantiate at bundle time instead of an asset to fetch at
+runtime, and the bundle fails.
+
+## Usage
+
+Frame mode blits the rasterized frame onto a canvas:
+
+```tsx
+<BrightFX effect={confettiEffect} seed={1} amount={1} />
+```
+
+Sprite mode calls `render` once per particle instead:
+
+```tsx
+<BrightFX
+  effect={confettiEffect}
+  mode="sprite"
+  render={(particle, index) => (
+    <div style={{ width: particle.size, height: particle.size, background: "gold", borderRadius: "50%" }} />
+  )}
+/>
+```
+
+## Props
+
+| Prop | Type | Default | Notes |
+|---|---|---|---|
+| `effect` | `EffectConfig` | required | Must carry an `emitterTrack` — baked playback needs one. |
+| `seed` | `number` | `1` | Passed to `BrightFX.create`. |
+| `amount` | `number` | `1` | 0..1 opacity multiplier; at or below `0.02` the component renders nothing and skips the seek. |
+| `window` | `[number, number]` | — | Seconds; outside it nothing renders and no seek happens. |
+| `mode` | `"frame" \| "sprite"` | `"frame"` | `frame` blits the rasterized frame; `sprite` calls `render` per particle. |
+| `render` | `(particle, index) => ReactNode` | — | Required in sprite mode. |
+| `wasmSrc` | `string` | `staticFile(DEFAULT_WASM_PATH)` | Overrides where the wasm is fetched from. |
+| `style` | `CSSProperties` | — | Merged onto the wrapping `AbsoluteFill`. |
+
+## Sprite mode's unstable key
+
+In sprite mode, `render` is called with an **unstable index key** — particles
+are not tracked by identity, so the same index can name a different particle
+on the next frame. Glyphs rendered from `render` must not carry CSS
+transitions or hold state across renders; treat each call as drawing a fresh,
+stateless element for the current frame only.

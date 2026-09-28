@@ -1,0 +1,13 @@
+[package]
+name = "brightfx-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+brightfx-core = { path = "../brightfx-core" }
+brightfx-tracks = { path = "../brightfx-tracks" }
+wasm-bindgen = "0.2"

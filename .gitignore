@@ -1,0 +1,14 @@
+target/
+core/brightfx-wasm/pkg-node/
+core/brightfx-wasm/pkg-web/
+core/harnesses/csharp/bin/
+core/harnesses/csharp/obj/
+.superpowers/
+
+packages/node_modules/
+packages/*/node_modules/
+packages/*/dist/
+packages/brightfx-js/wasm/
+packages/brightfx-remotion/public/
+packages/brightfx-remotion/test/out/
+packages/*.tgz

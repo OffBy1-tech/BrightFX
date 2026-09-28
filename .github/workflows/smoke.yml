@@ -1,0 +1,163 @@
+# Runs core/scripts/smoke-all.sh, the verification entry point for the FFI
+# boundary: Rust tests, the C header staleness guard, the fixture staleness
+# guard, then the Node, Swift, and C# harnesses replaying the same protocol.
+#
+# The full script runs on macOS only: the Swift harness needs swiftc and
+# the header guard needs the pinned cbindgen. A second job builds the C ABI
+# for MSVC on Windows and runs the Rust tests and the C# harness there, so
+# the P/Invoke contract is checked against a real .dll, not only a .dylib
+# standing in for one (issue #4).
+#
+# Two rules this workflow must keep (issue #3):
+#
+# 1. Never set BRIGHTFX_REGENERATE. With it set, the fixture test silently
+#    re-baselines instead of verifying and reports success. Regeneration is
+#    a manual, human-reviewed step; the first job step refuses to run if the
+#    variable has leaked in from anywhere.
+# 2. cbindgen stays pinned. An unpinned version produces cosmetic churn in
+#    the generated header, which trips the staleness guard with a failure
+#    that looks like an ABI change but is not. The pin lives in one place
+#    below (CBINDGEN_VERSION) and matches core/README.md.
+
+name: smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CBINDGEN_VERSION: 0.29.4
+  WASM_PACK_VERSION: 0.15.0
+  CARGO_TERM_COLOR: always
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  smoke-all:
+    name: smoke-all.sh on macOS
+    # Pinned rather than macos-latest so a runner-image migration cannot
+    # change the toolchain underneath a red build.
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Refuse to run with BRIGHTFX_REGENERATE set
+        run: |
+          if [ -n "${BRIGHTFX_REGENERATE+set}" ]; then
+            echo "::error::BRIGHTFX_REGENERATE is set. A verify run would re-baseline the fixtures instead of checking them." >&2
+            exit 1
+          fi
+
+      - name: Rust toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: Restore pinned cargo tools
+        id: cargo-tools
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/bin/cbindgen
+            ~/.cargo/bin/wasm-pack
+          key: cargo-tools-${{ runner.os }}-${{ runner.arch }}-cbindgen-${{ env.CBINDGEN_VERSION }}-wasm-pack-${{ env.WASM_PACK_VERSION }}
+
+      - name: Install pinned cargo tools
+        if: steps.cargo-tools.outputs.cache-hit != 'true'
+        run: |
+          cargo install cbindgen --version "$CBINDGEN_VERSION" --locked
+          cargo install wasm-pack --version "$WASM_PACK_VERSION" --locked
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Cache Remotion's Chrome Headless Shell
+        uses: actions/cache@v6
+        with:
+          # Remotion resolves its download cache from the cwd of the process
+          # that runs it: the still test spawns `remotion still` inside
+          # packages/brightfx-remotion, so the cache lands there, not at the
+          # workspace root.
+          path: packages/brightfx-remotion/node_modules/.remotion
+          key: remotion-chrome-${{ runner.os }}-${{ hashFiles('packages/package-lock.json') }}
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Toolchain versions
+        run: |
+          rustc --version
+          cargo --version
+          cbindgen --version
+          wasm-pack --version
+          swift --version
+          node --version
+          dotnet --version
+
+      - name: smoke-all.sh
+        run: ./core/scripts/smoke-all.sh
+
+  windows:
+    name: Rust tests and C# harness on Windows
+    # Pinned for the same reason as the macOS job. x64 only: the Cdecl
+    # calling-convention fix in the harness is a no-op here and on arm64
+    # macOS, and would only be exercised by an x86 build, which nothing
+    # targets.
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Refuse to run with BRIGHTFX_REGENERATE set
+        run: |
+          if [ -n "${BRIGHTFX_REGENERATE+set}" ]; then
+            echo "::error::BRIGHTFX_REGENERATE is set. A verify run would re-baseline the fixtures instead of checking them." >&2
+            exit 1
+          fi
+
+      - name: Rust toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Toolchain versions
+        run: |
+          rustc --version
+          cargo --version
+          dotnet --version
+
+      # The fixture and golden tests compare within a libm-drift tolerance;
+      # this is the first OS other than the recording one to exercise it.
+      - name: Rust tests
+        run: cargo test --manifest-path core/Cargo.toml
+
+      - name: C# harness against brightfx_ffi.dll
+        run: ./core/harnesses/csharp/run.sh

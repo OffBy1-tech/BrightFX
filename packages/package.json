@@ -1,0 +1,5 @@
+{
+  "name": "brightfx-packages",
+  "private": true,
+  "workspaces": ["brightfx-js", "brightfx-remotion"]
+}

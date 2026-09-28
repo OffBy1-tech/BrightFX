@@ -1,0 +1,6 @@
+{
+  "name": "brightfx-node-harness",
+  "private": true,
+  "type": "module",
+  "scripts": { "smoke": "node smoke.mjs" }
+}
