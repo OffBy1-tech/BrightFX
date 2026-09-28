@@ -124,7 +124,7 @@ test("a view survives setConfig growing linear memory", () => {
   // module before it is parsed. Repeatedly applying the fixture config does
   // NOT do this; after the first load its allocations are served from the
   // free list and memory stays put, which left this test passing while
-  // checking nothing (issue #8). Sizing the config against the live memory
+  // checking nothing. Sizing the config against the live memory
   // keeps the growth guaranteed no matter what ran before this test.
   const memory = mod.wasmMemory();
   const keyframes = Math.ceil(memory.buffer.byteLength / 20) + 1;

@@ -6,9 +6,9 @@
 # the header guard needs the pinned cbindgen. A second job builds the C ABI
 # for MSVC on Windows and runs the Rust tests and the C# harness there, so
 # the P/Invoke contract is checked against a real .dll, not only a .dylib
-# standing in for one (issue #4).
+# standing in for one.
 #
-# Two rules this workflow must keep (issue #3):
+# Two rules this workflow must keep:
 #
 # 1. Never set BRIGHTFX_REGENERATE. With it set, the fixture test silently
 #    re-baselines instead of verifying and reports success. Regeneration is
