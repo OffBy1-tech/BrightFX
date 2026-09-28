@@ -114,9 +114,9 @@ fn emitter(rate: f32, burst: u32, pattern: EmissionPattern, angle: f32, spread: 
     }
 }
 
-/// Rainbow diamonds tumbling down the whole frame, about 90 pieces
-/// of confetti. A 0.15 s scatter leg spreads each dozen along a chord of
-/// the frame.
+/// Rainbow diamonds tumbling down the whole frame, about 200 chunky
+/// pieces of confetti. A 0.15 s scatter leg spreads each dozen along a
+/// chord of the frame.
 ///
 /// `rainbowSpeed` sits at its ceiling because the hue a particle is drawn
 /// with is its spawn hue plus `progress * 120`, and that second term runs
@@ -126,14 +126,21 @@ fn emitter(rate: f32, burst: u32, pattern: EmissionPattern, angle: f32, spread: 
 /// warns about does not bite here: the emitter scatters over the whole
 /// frame, so a piece's height is where it was born, not how old it is.
 ///
+/// Density, size, and alpha are set by how the preset reads in a real
+/// full-frame composition, not in a thumbnail: dropped into a busy,
+/// brightly lit music-video frame (#6), 0.95 per step at size 9 with a
+/// 0.6 `startAlpha` barely registered. 1.8 per step holds ~216 pieces,
+/// and size 16 -- `size` is roughly the diamond's half-extent -- matches
+/// a 14×20 rounded rectangle. Both were matched against a hand-rolled
+/// layer at 1920×1080 and 1080×1920.
+///
 /// Pieces are born inside the frame, so they cannot simply wink out at
 /// the end of a flat two-second life. `endAlpha` is 0 so the exit is a
-/// fade, and `startAlpha` 0.6 softens the entrance the same way. Both are
-/// a workaround: the real cure is a life long enough to cross the frame,
-/// which is the "Raise lifetimeMax for baked playback" issue (#24). The
-/// spawn rate carries the cost of the fade -- 0.95 per step holds ~114
-/// pieces, of which about 90 are above half alpha, which is the
-/// component's count.
+/// fade. The entrance is not faded: `startAlpha` 1 is what the reference
+/// layer showed, and a softer one left a visible share of the pieces
+/// semi-transparent. Pieces therefore appear in place at full strength;
+/// the real cure for that is a life long enough to cross the frame, the
+/// "Raise lifetimeMax for baked playback" issue (#2).
 pub fn confetti() -> ParticleFxConfig {
     let mut c = base(
         "confetti",
@@ -142,7 +149,7 @@ pub fn confetti() -> ParticleFxConfig {
         "confetti",
         scatter_sweep(-40.0, FRAME_H, 0.15),
     );
-    c.emitter = emitter(0.95, 30, EmissionPattern::DirectionalCone, 90.0, 40.0);
+    c.emitter = emitter(1.8, 30, EmissionPattern::DirectionalCone, 90.0, 40.0);
     c.shape = ParticleShape::Diamond;
     c.blend_mode = BlendMode::SourceOver;
     c.glow_bloom = false;
@@ -155,13 +162,13 @@ pub fn confetti() -> ParticleFxConfig {
     c.rotation_speed_max = 0.09;
     c.lifetime_min = 120.0;
     c.lifetime_max = 120.0;
-    c.start_size = 9.0;
-    c.peak_size = 9.0;
-    c.end_size = 9.0;
+    c.start_size = 16.0;
+    c.peak_size = 16.0;
+    c.end_size = 16.0;
     c.size_curve = SizeCurve::Constant;
     c.color_mode = ColorMode::RainbowCycle;
     c.rainbow_speed = 10.0;
-    c.start_alpha = 0.6;
+    c.start_alpha = 1.0;
     c.peak_alpha = 1.0;
     c.end_alpha = 0.0;
     c
@@ -280,7 +287,7 @@ pub fn sparkles() -> ParticleFxConfig {
 /// spectrum still reads as a warm top over a cool bottom. 1.15 per step
 /// is a pool of ~138, about 100 of them inside the frame, and that is
 /// where the rows stop sorting by hue at both t = 3 s and t = 6 s. A
-/// longer `lifetimeMax` (issue #24) would buy the same mixing from a
+/// longer `lifetimeMax` (issue #2) would buy the same mixing from a
 /// deeper band instead. Turbulence is the component's sway.
 pub fn sprinkle_rain() -> ParticleFxConfig {
     let mut c = base(
@@ -319,6 +326,12 @@ pub fn sprinkle_rain() -> ParticleFxConfig {
 /// rounded pieces. Rounder, larger, and denser than the sprinkles, which
 /// is what separates the two rains on screen.
 ///
+/// Denser rather than bigger is what reads as frosting at full-frame
+/// scale (#6): 1.8 per step holds ~216 drops at 10–11 px. The old 0.7
+/// per step at 8–9 px all but vanished against a pink background plate,
+/// and going the other way -- 15–16 px at 1.3 per step -- turned the
+/// drops into large white bubbles.
+///
 /// The component's palette is six colours (two pinks, white, yellow,
 /// purple, green); this keeps the pink-and-white majority and drops the
 /// rest, because a full spectrum here would be `sprinkle-rain` again. The
@@ -332,7 +345,7 @@ pub fn frosting_rain() -> ParticleFxConfig {
         "frosting",
         sweep_track((0.0, -20.0), (FRAME_W, -20.0), 0.5, TRACK_DURATION),
     );
-    c.emitter = emitter(0.7, 30, EmissionPattern::DirectionalCone, 90.0, 15.0);
+    c.emitter = emitter(1.8, 30, EmissionPattern::DirectionalCone, 90.0, 15.0);
     c.shape = ParticleShape::Circle;
     c.blend_mode = BlendMode::SourceOver;
     c.glow_bloom = false;
@@ -343,9 +356,9 @@ pub fn frosting_rain() -> ParticleFxConfig {
     c.turbulence = 2.2;
     c.lifetime_min = 120.0;
     c.lifetime_max = 120.0;
-    c.start_size = 8.0;
-    c.peak_size = 9.0;
-    c.end_size = 8.0;
+    c.start_size = 10.0;
+    c.peak_size = 11.0;
+    c.end_size = 10.0;
     c.size_curve = SizeCurve::GrowShrink;
     c.color_mode = ColorMode::GradientLifetime;
     c.primary_color = "#FF5D8F".into();
