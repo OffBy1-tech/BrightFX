@@ -130,9 +130,9 @@ pub struct Simulation {
     emitter_active: bool,
     buffer: Vec<ParticleInstance>,
     /// Whole steps applied since the last reset in baked mode. `None`
-    /// whenever the pool is not the product of a pure replay -- after
-    /// `advance`, `trigger_burst`, `set_emitter`, or `set_config` -- so
-    /// the next `seek` replays from zero.
+    /// whenever the pool is not the product of a pure replay, so the next
+    /// `seek` replays from zero. Only `seek` sets it; everything else
+    /// clears it through `leave_baked`.
     baked: Option<u32>,
 }
 
@@ -168,7 +168,7 @@ impl Simulation {
         self.config = config;
         // Live particles keep their state (that is the boundary's contract),
         // but the track may have changed, so the next seek replays.
-        self.baked = None;
+        self.leave_baked();
     }
 
     /// Sets the emitter's position, velocity, and active state.
@@ -183,7 +183,7 @@ impl Simulation {
     /// under the track, so the next `seek` must replay and re-sample it
     /// rather than step forward from a state the track did not produce.
     pub fn set_emitter(&mut self, x: f32, y: f32, vx: f32, vy: f32, active: bool) {
-        self.baked = None;
+        self.leave_baked();
         self.place_emitter(x, y, vx, vy, active);
     }
 
@@ -203,7 +203,7 @@ impl Simulation {
     }
 
     pub fn trigger_burst(&mut self) {
-        self.baked = None;
+        self.leave_baked();
         self.spawn_burst();
     }
 
@@ -218,7 +218,7 @@ impl Simulation {
     }
 
     pub fn advance(&mut self, dt: f32) {
-        self.baked = None;
+        self.leave_baked();
         self.step(dt);
     }
 
@@ -240,8 +240,17 @@ impl Simulation {
         &self.config.name
     }
 
-    fn reset(&mut self) {
+    /// Drops the baked position, so the next `seek` replays from zero
+    /// instead of stepping forward. The one place `baked` is cleared:
+    /// every writer of simulation state other than `seek` itself calls
+    /// this first, which is what lets a forward seek trust the state the
+    /// previous seek left behind.
+    fn leave_baked(&mut self) {
         self.baked = None;
+    }
+
+    fn reset(&mut self) {
+        self.leave_baked();
         self.pool.clear();
         self.rng = Rng::new(self.seed);
         self.spawn_budget = 0.0;
@@ -289,10 +298,8 @@ impl Simulation {
 
         // On the forward path the `active` the loop starts from is
         // `self.emitter_active` as the previous seek left it. That is
-        // sound because every other writer of `emitter_active`
-        // (`set_emitter`, `advance`, `trigger_burst`, `set_config`,
-        // `reset`) clears `self.baked` first, so a cursor can only
-        // survive a pure replay.
+        // sound because every other writer of `emitter_active` calls
+        // `leave_baked` first, so a cursor can only survive a pure replay.
         let from = match self.baked {
             Some(step) if step <= n => step,
             _ => {
@@ -316,17 +323,7 @@ impl Simulation {
             let active = self.emitter_active;
             self.place_emitter(x, y, vx, vy, active);
 
-            // Each trigger names exactly one step, so there is no
-            // bookkeeping of what has fired.
-            for trig in &track.triggers {
-                if trig.fire_step == k + 1 {
-                    match trig.kind {
-                        TriggerKind::Burst => self.spawn_burst(),
-                        TriggerKind::StartContinuous => self.emitter_active = true,
-                        TriggerKind::StopContinuous => self.emitter_active = false,
-                    }
-                }
-            }
+            self.fire_triggers(&track, k + 1);
 
             self.step(PLAYBACK_STEP);
         }
@@ -342,8 +339,15 @@ impl Simulation {
         self.reset();
         let (x0, y0, vx0, vy0) = sample_track(&track.keyframes, 0.0);
         self.place_emitter(x0, y0, vx0, vy0, false);
+        self.fire_triggers(track, 0);
+    }
+
+    /// Applies the triggers that fire in `step`, in time order. Each
+    /// trigger names exactly one step, so there is no bookkeeping of what
+    /// has fired.
+    fn fire_triggers(&mut self, track: &BakedTrack, step: u32) {
         for trig in &track.triggers {
-            if trig.fire_step == 0 {
+            if trig.fire_step == step {
                 match trig.kind {
                     TriggerKind::Burst => self.spawn_burst(),
                     TriggerKind::StartContinuous => self.emitter_active = true,
