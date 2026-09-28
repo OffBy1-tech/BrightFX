@@ -12,9 +12,15 @@
 //! Two numbers drive every preset and are worth stating once. The core
 //! steps at `PLAYBACK_STEP` (1/60 s) and measures `lifetime` in those
 //! steps, so a preset's on-screen population is
-//! `spawnRateWhileActive * lifetime` and its lifetime ceiling of 120
-//! steps is two seconds of travel. Speeds are px per step, so the
+//! `spawnRateWhileActive * lifetime` and its lifetime ceiling of 300
+//! steps is five seconds of travel. Speeds are px per step, so the
 //! Remotion components' "px per 30 fps frame" halve on the way in.
+//!
+//! A particle dies when its life runs out, not when it leaves the frame,
+//! so that population includes the ones already off screen. A rain sized
+//! to reach the bottom of the 1080×1920 delivery frame spends half its
+//! life below a 1080-high one, which is why the rains' pools run to
+//! 300-400 to keep ~120-190 in view. `MAX_PARTICLES` is 500.
 //!
 //! One consequence of that shapes both rainbow presets and is worth
 //! stating once. `RainbowCycle` advances the hue by `rainbowSpeed * 0.5`
@@ -135,12 +141,16 @@ fn emitter(rate: f32, burst: u32, pattern: EmissionPattern, angle: f32, spread: 
 /// layer at 1920×1080 and 1080×1920.
 ///
 /// Pieces are born inside the frame, so they cannot simply wink out at
-/// the end of a flat two-second life. `endAlpha` is 0 so the exit is a
-/// fade. The entrance is not faded: `startAlpha` 1 is what the reference
-/// layer showed, and a softer one left a visible share of the pieces
-/// semi-transparent. Pieces therefore appear in place at full strength;
-/// the real cure for that is a life long enough to cross the frame, the
-/// "Raise lifetimeMax for baked playback" issue (#2).
+/// the end of their life. `endAlpha` is 0 so the exit is a fade. The
+/// entrance is not faded: `startAlpha` 1 is what the reference layer
+/// showed, and a softer one left a visible share of the pieces
+/// semi-transparent. Pieces therefore appear in place at full strength.
+/// A longer life alone does not cure that -- a piece born mid-frame
+/// still has to appear somewhere. The cure is to spawn above the frame
+/// and fall through it, which the 5 s lifetime ceiling allows, but under
+/// `RainbowCycle` that ties hue to height and the frame becomes one
+/// colour ramp (see the module doc); it waits on a per-particle colour
+/// mode (#3).
 pub fn confetti() -> ParticleFxConfig {
     let mut c = base(
         "confetti",
@@ -214,8 +224,11 @@ pub fn fireflies() -> ParticleFxConfig {
 /// White-to-gold stars drifting up and fading. The effect it replaces
 /// exists in two palettes; both rise 750–1100 px over 3–7 s.
 ///
-/// A particle lives 2 s at most, so a full-height rise would be a frantic
-/// one-second crossing. These take the other half of the trade: a
+/// These were tuned when a particle lived 2 s at most, where a
+/// full-height rise would have been a frantic one-second crossing, and
+/// took the other half of the trade. The 5 s ceiling now allows the
+/// component's slow full-height rise; this preset has not been retuned
+/// for it. As it stands: a
 /// `DirectionalCone` straight up (270°) at 4.5–6.5 px/step with `drag`
 /// just under 1 lifts a star 200–500 px, about 330 px typically, over a
 /// 60–90 step life -- a rise that plainly reads as upward without the
@@ -259,9 +272,14 @@ pub fn sparkles() -> ParticleFxConfig {
 }
 
 /// Rainbow capsules falling from above the top edge: `SprinkleRain`, 70
-/// pieces of 8×20 px crossing the frame. The fall is faster than the
-/// component's 2.2–4.0 s because a particle only lives 2 s; slower and the
-/// rain would stop in mid-air.
+/// pieces of 8×20 px crossing the frame. The fall is at the fast end of
+/// the component's 2.2–4.0 s, a 1080 px frame in about 1.9 s, because the
+/// rain must also clear the band below and, fitted to 1080×1920, a 1920 px
+/// frame below an 800 px band: 8.5 px/step over a 300-step life covers
+/// that 2720 px with the `gravityY` below. Turbulence gives each piece a
+/// drift of up to ±4 px/step (see `frosting_rain`), so a few of the
+/// slowest, deepest-spawned pieces still end short of a 1920 px bottom
+/// edge; the rain as a whole reaches it.
 ///
 /// The emitter does not sweep the top edge. It wanders a *band* 450 px
 /// deep above it, which is what mixes the colours. Per the module doc, at
@@ -277,18 +295,17 @@ pub fn sparkles() -> ParticleFxConfig {
 ///
 /// The rest follows from that band. `gravityY` is only 0.05 so the fall
 /// stays near constant speed and the band does not pile the rain at the
-/// top; 10–13 px/step is then fast enough that even the deepest-spawned
-/// piece clears the bottom edge inside its 2 s, so nothing winks out
-/// mid-air.
+/// top.
 ///
 /// The spawn rate is the one place this preset knowingly overshoots its
 /// component. Mixing scales with population -- the module doc's cycle
 /// count is `population / 72` -- and at the component's 70 pieces the
 /// spectrum still reads as a warm top over a cool bottom. 1.15 per step
-/// is a pool of ~138, about 100 of them inside the frame, and that is
-/// where the rows stop sorting by hue at both t = 3 s and t = 6 s. A
-/// longer `lifetimeMax` (issue #2) would buy the same mixing from a
-/// deeper band instead. Turbulence is the component's sway.
+/// was a pool of ~138, about 100 of them inside the frame, and that is
+/// where the rows stop sorting by hue at both t = 3 s and t = 6 s. The
+/// 5 s life keeps that on-screen count at a slower fall with 0.95 per
+/// step (a pool of ~285, most of it below the frame or still in the
+/// band). Turbulence is the component's sway.
 pub fn sprinkle_rain() -> ParticleFxConfig {
     let mut c = base(
         "sprinkle-rain",
@@ -297,19 +314,19 @@ pub fn sprinkle_rain() -> ParticleFxConfig {
         "sprinkle",
         scatter_sweep(-450.0, -20.0, 0.1),
     );
-    c.emitter = emitter(1.15, 30, EmissionPattern::DirectionalCone, 90.0, 20.0);
+    c.emitter = emitter(0.95, 30, EmissionPattern::DirectionalCone, 90.0, 20.0);
     c.shape = ParticleShape::ShardCrystal;
     c.blend_mode = BlendMode::SourceOver;
     c.glow_bloom = false;
-    c.initial_speed_min = 10.0;
-    c.initial_speed_max = 13.0;
+    c.initial_speed_min = 8.5;
+    c.initial_speed_max = 10.5;
     c.gravity_y = 0.05;
     c.drag = 1.0;
     c.turbulence = 2.2;
     c.rotation_speed_min = 0.04;
     c.rotation_speed_max = 0.1;
-    c.lifetime_min = 120.0;
-    c.lifetime_max = 120.0;
+    c.lifetime_min = 300.0;
+    c.lifetime_max = 300.0;
     c.start_size = 8.0;
     c.peak_size = 8.0;
     c.end_size = 8.0;
@@ -327,10 +344,19 @@ pub fn sprinkle_rain() -> ParticleFxConfig {
 /// is what separates the two rains on screen.
 ///
 /// Denser rather than bigger is what reads as frosting at full-frame
-/// scale (#6): 1.8 per step holds ~216 drops at 10–11 px. The old 0.7
-/// per step at 8–9 px all but vanished against a pink background plate,
-/// and going the other way -- 15–16 px at 1.3 per step -- turned the
-/// drops into large white bubbles.
+/// scale (#6): ~180 drops in a 1920×1080 frame at 10–11 px. 35–45 at
+/// 8–9 px all but vanished against a pink background plate, and going
+/// the other way -- 15–16 px -- turned the drops into large white bubbles.
+///
+/// The fall is the component's: a 1080 px frame in about 2.2 s at a near
+/// constant 7–8.5 px/step, and a 300-step life so the slowest drop still
+/// reaches the bottom of a 1920 px one. Two things keep it near constant.
+/// `gravityY` is only 0.05, since density goes as 1 / speed and an
+/// accelerating rain crowds the top. And turbulence is 0.8, not the
+/// sprinkles' 2.2: its per-step push integrates to a fixed per-drop drift
+/// of up to ±0.15 * turbulence / 0.08 px/step, which at 2.2 is ±4 --
+/// enough at this speed to stall some drops near the top and let others
+/// die before the bottom. 1.35 per step then holds the same ~180 in view.
 ///
 /// The component's palette is six colours (two pinks, white, yellow,
 /// purple, green); this keeps the pink-and-white majority and drops the
@@ -345,17 +371,17 @@ pub fn frosting_rain() -> ParticleFxConfig {
         "frosting",
         sweep_track((0.0, -20.0), (FRAME_W, -20.0), 0.5, TRACK_DURATION),
     );
-    c.emitter = emitter(1.8, 30, EmissionPattern::DirectionalCone, 90.0, 15.0);
+    c.emitter = emitter(1.35, 30, EmissionPattern::DirectionalCone, 90.0, 15.0);
     c.shape = ParticleShape::Circle;
     c.blend_mode = BlendMode::SourceOver;
     c.glow_bloom = false;
-    c.initial_speed_min = 8.0;
-    c.initial_speed_max = 10.5;
-    c.gravity_y = 0.4;
+    c.initial_speed_min = 7.0;
+    c.initial_speed_max = 8.5;
+    c.gravity_y = 0.05;
     c.drag = 1.0;
-    c.turbulence = 2.2;
-    c.lifetime_min = 120.0;
-    c.lifetime_max = 120.0;
+    c.turbulence = 0.8;
+    c.lifetime_min = 290.0;
+    c.lifetime_max = 300.0;
     c.start_size = 10.0;
     c.peak_size = 11.0;
     c.end_size = 10.0;
@@ -411,11 +437,15 @@ pub fn bubbles() -> ParticleFxConfig {
 /// and gears. The composition supplies the glyph and scales `size` up
 /// (the core caps size at 40; the glyphs are 60–120 px).
 ///
-/// `FlyingDonuts` crosses the frame in 2.8–4.5 s; a particle lives 2 s, so
-/// this crosses in 2 s. Even then 15 px/step — the speed cap — only covers
-/// 1800 px of the 2100 px the object has to travel, so a rightward
-/// `gravity_x` carries it the rest of the way. See the issue "Raise
-/// lifetimeMax for baked playback".
+/// `FlyingDonuts` crosses 2200 px (the frame plus 140 px each side) in
+/// 2.8–4.5 s, at constant speed, arcing 260–410 px up and back down. This
+/// is that motion as a projectile: no `gravityX`, so the horizontal speed
+/// is constant, and a launch at 329° ± 5° and 10.5–13 px/step puts it at
+/// 8.5–11.7 px/step across -- a 3.1–4.3 s crossing. For an arc of height
+/// `h` that lands back at launch height after `T` steps, gravity is
+/// `8h / T²` px/step²; `gravityY` 0.55 (0.055 px/step² after the core's
+/// 0.1 scale) is that for ~335 px over ~220 steps. The 300-step life
+/// outlasts the slowest crossing, so nothing vanishes on screen.
 pub fn flight_arc() -> ParticleFxConfig {
     let mut c = base(
         "flight-arc",
@@ -424,19 +454,19 @@ pub fn flight_arc() -> ParticleFxConfig {
         "arc",
         sweep_track((-100.0, FRAME_H * 0.43), (-100.0, FRAME_H * 0.6), 3.0, TRACK_DURATION),
     );
-    c.emitter = emitter(0.06, 4, EmissionPattern::DirectionalCone, 318.0, 12.0);
+    c.emitter = emitter(0.035, 4, EmissionPattern::DirectionalCone, 329.0, 10.0);
     c.shape = ParticleShape::Circle;
     c.blend_mode = BlendMode::SourceOver;
     c.glow_bloom = false;
-    c.initial_speed_min = 14.0;
-    c.initial_speed_max = 15.0;
-    c.gravity_x = 1.0;
-    c.gravity_y = 1.7;
+    c.initial_speed_min = 10.5;
+    c.initial_speed_max = 13.0;
+    c.gravity_x = 0.0;
+    c.gravity_y = 0.55;
     c.drag = 1.0;
     c.rotation_speed_min = 0.02;
     c.rotation_speed_max = 0.05;
-    c.lifetime_min = 120.0;
-    c.lifetime_max = 120.0;
+    c.lifetime_min = 300.0;
+    c.lifetime_max = 300.0;
     c.start_size = 34.0;
     c.peak_size = 40.0;
     c.end_size = 36.0;

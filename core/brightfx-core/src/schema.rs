@@ -219,8 +219,8 @@ impl ParticleFxConfig {
         clamp(&mut self.vortex_attraction, -3.0, 3.0, "vortexAttraction");
         clamp(&mut self.rotation_speed_min, -10.0, 10.0, "rotationSpeedMin");
         clamp(&mut self.rotation_speed_max, -10.0, 10.0, "rotationSpeedMax");
-        clamp(&mut self.lifetime_min, 10.0, 120.0, "lifetimeMin");
-        clamp(&mut self.lifetime_max, 10.0, 120.0, "lifetimeMax");
+        clamp(&mut self.lifetime_min, 10.0, 300.0, "lifetimeMin");
+        clamp(&mut self.lifetime_max, 10.0, 300.0, "lifetimeMax");
         clamp(&mut self.start_size, 1.0, 40.0, "startSize");
         clamp(&mut self.peak_size, 1.0, 40.0, "peakSize");
         clamp(&mut self.end_size, 0.0, 40.0, "endSize");
@@ -507,16 +507,30 @@ mod tests {
     }
 
     #[test]
+    fn a_five_second_lifetime_is_in_bounds_for_baked_playback() {
+        // A baked preset's particle is the on-screen object and has to
+        // cross the frame, which takes up to 4.5 s; 300 steps is 5 s.
+        let mut config = example_config();
+        config.lifetime_min = 300.0;
+        config.lifetime_max = 300.0;
+
+        let changed = config.clamp_to_bounds();
+
+        assert!(changed.is_empty(), "{changed:?}");
+        assert_eq!(config.lifetime_max, 300.0);
+    }
+
+    #[test]
     fn a_pair_that_only_inverts_after_range_clamping_is_still_repaired() {
-        // min clamps down to 120 which is above an in-range max of 60
+        // min clamps down to 300 which is above an in-range max of 60
         let mut config = example_config();
         config.lifetime_min = 500.0;
         config.lifetime_max = 60.0;
 
         let changed = config.clamp_to_bounds();
 
-        assert_eq!(config.lifetime_min, 120.0);
-        assert_eq!(config.lifetime_max, 120.0);
+        assert_eq!(config.lifetime_min, 300.0);
+        assert_eq!(config.lifetime_max, 300.0);
         assert!(changed.contains(&"lifetimeMin"));
         assert!(changed.contains(&"lifetimeMax"));
     }
