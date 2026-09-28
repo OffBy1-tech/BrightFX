@@ -161,6 +161,8 @@ internal static class Program
     }
 
     /// Compares the live particle buffer against a recorded one within tolerance.
+    /// A non-finite float fails outright: `Math.Abs(a - b) > tolerance` is
+    /// false for NaN, so a NaN in both buffers would otherwise pass.
     private static void AssertBufferMatches(IntPtr sim, uint expectedCount, uint stride, float[] expected, float tolerance)
     {
         uint count = Native.bfx_particle_count(sim);
@@ -173,6 +175,7 @@ internal static class Program
         if (actual.Length != expected.Length) Fail($"buffer length diverged: {actual.Length} vs {expected.Length}");
         for (int index = 0; index < actual.Length; index++)
         {
+            if (!float.IsFinite(actual[index])) Fail($"float {index} is not finite: {actual[index]}");
             if (Math.Abs(actual[index] - expected[index]) > tolerance)
                 Fail($"float {index} drifted: got {actual[index]}, expected {expected[index]}");
         }

@@ -79,6 +79,8 @@ func drive(_ sim: OpaquePointer, frames: [EmitterFrame], burstFrame: Int, dt: Fl
 }
 
 /// Compares the live particle buffer against a recorded one within tolerance.
+/// A non-finite float fails outright: `abs(a - b) > tolerance` is false
+/// for NaN, so a NaN in both buffers would otherwise pass.
 func assertBufferMatches(
     _ sim: OpaquePointer, count expectedCount: UInt32, stride: UInt32, buffer expected: [Float], tolerance: Float
 ) throws {
@@ -90,6 +92,9 @@ func assertBufferMatches(
     let actual = UnsafeBufferPointer(start: base, count: Int(count * stride))
     guard actual.count == expected.count else {
         throw Failure("buffer length diverged: \(actual.count) vs \(expected.count)")
+    }
+    if let index = actual.firstIndex(where: { !$0.isFinite }) {
+        throw Failure("float \(index) is not finite: \(actual[index])")
     }
     for index in 0..<actual.count where abs(actual[index] - expected[index]) > tolerance {
         throw Failure("float \(index) drifted: got \(actual[index]), expected \(expected[index])")
