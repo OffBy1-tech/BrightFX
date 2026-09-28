@@ -1,0 +1,13 @@
+{
+  "comment": "Shared by src/Root.tsx and still.test.mjs. Trigger lists replace the triggers of core/fixtures/ffi-seek.config.json; probes are DOM markers pinned to the bottom-right corner (offsets in px from the right edge), revealed when the named Simulation method runs.",
+  "lateStartTriggers": [
+    { "time": 1.5, "kind": "startContinuous" },
+    { "time": 1.8, "kind": "burst" }
+  ],
+  "burstOnceTriggers": [{ "time": 0.5, "kind": "burst" }],
+  "probeSize": 6,
+  "probes": {
+    "raster": { "right": 0, "color": [0, 0, 255] },
+    "seek": { "right": 8, "color": [0, 255, 0] }
+  }
+}
