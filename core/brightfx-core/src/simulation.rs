@@ -49,7 +49,11 @@ fn grid_tolerance(target: f32) -> f64 {
 /// Rounding up rather than down is what makes the contract "nothing
 /// authored at or before `target` is still pending": an off-grid host
 /// (24 fps frames never land on the 1/60 grid) would otherwise see every
-/// trigger one frame late.
+/// trigger one frame late. The snap keeps that contract even when it
+/// rounds down: a trigger authored between the grid point and `target`
+/// is nearer the point than `target` is, so it snaps to the same step and
+/// has fired. What a downward snap does move is the particle state, which
+/// then sits slightly *before* `target` -- see `seek`.
 fn grid_step(target: f32) -> u32 {
     let steps = target as f64 * GRID_RATE;
     let nearest = steps.round();
@@ -241,10 +245,12 @@ impl Simulation {
     }
 
     /// Drops the baked position, so the next `seek` replays from zero
-    /// instead of stepping forward. The one place `baked` is cleared:
-    /// every writer of simulation state other than `seek` itself calls
-    /// this first, which is what lets a forward seek trust the state the
-    /// previous seek left behind.
+    /// instead of stepping forward. The one place `baked` is cleared. By
+    /// convention -- nothing enforces it -- every host-facing call that
+    /// changes simulation state calls this: `set_emitter`, `trigger_burst`,
+    /// and `advance` before their own writes, `set_config` after swapping
+    /// the config, and `reset`. A new such call must do the same, or a
+    /// forward seek would step on from a state the track did not produce.
     fn leave_baked(&mut self) {
         self.baked = None;
     }
@@ -274,6 +280,12 @@ impl Simulation {
     /// a trigger on the first frame at or after its authored time, and a
     /// trigger authored at the very end of a track fires even though no
     /// frame time lands exactly on an off-grid duration.
+    ///
+    /// The snap tolerance grows with `time`, so late in a long track a
+    /// `time` just *after* a grid point snaps down to it and the particle
+    /// state sits up to ~83 µs before `time`. Triggers are unaffected
+    /// (see `grid_step`). Only NTSC rates (59.94, 29.97, 23.976 fps) hit
+    /// this, from roughly 170-280 s depending on the rate.
     ///
     /// If the last call was a seek to an earlier or equal grid step, only
     /// the steps in between are applied; otherwise the simulation resets

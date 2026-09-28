@@ -39,11 +39,11 @@ exactly once.
     `time` itself), which matters only for NTSC rates. Frames at 59.94,
     29.97, and 23.976 fps sit a few thousandths of a step off the grid,
     and from roughly 170–280 s onward (by rate) a frame just *after* a
-    grid point falls inside the tolerance and snaps down to it: the
-    simulation then sits up to ~85 µs *before* `time`, the one exception
-    to "never late". Only a trigger authored inside that sliver fires a
-    frame late. Integer rates (24, 25, 30, 60 fps) land on or clear of the
-    grid and are unaffected.
+    grid point falls inside the tolerance and snaps down to it. The only
+    effect is that the particle state sits up to ~83 µs *before* `time`:
+    a trigger authored in that sliver snaps to the same grid point, so it
+    has still fired when the frame is rendered. Integer rates (24, 25, 30,
+    60 fps) land on or clear of the grid and are unaffected.
   - `buffer() -> &[ParticleInstance]` — current particle instances to draw
     (position, size, rotation, normalized RGBA color).
   - `particle_count() -> usize`.
