@@ -287,7 +287,7 @@ pub fn sparkles() -> ParticleFxConfig {
 /// spectrum still reads as a warm top over a cool bottom. 1.15 per step
 /// is a pool of ~138, about 100 of them inside the frame, and that is
 /// where the rows stop sorting by hue at both t = 3 s and t = 6 s. A
-/// longer `lifetimeMax` (issue #24) would buy the same mixing from a
+/// longer `lifetimeMax` (issue #2) would buy the same mixing from a
 /// deeper band instead. Turbulence is the component's sway.
 pub fn sprinkle_rain() -> ParticleFxConfig {
     let mut c = base(
