@@ -7,7 +7,7 @@ mod common;
 
 use brightfx_core::schema::{EmitterKeyframe, EmitterTrigger, TriggerKind};
 use brightfx_core::{ParticleFxConfig, Simulation};
-use common::fixtures_dir;
+use common::{fixtures_dir, instance_bits};
 
 const SEED: u64 = 42;
 
@@ -24,9 +24,8 @@ fn fresh_at(time: f32) -> Simulation {
 
 fn assert_same(a: &Simulation, b: &Simulation, label: &str) {
     assert_eq!(a.particle_count(), b.particle_count(), "particle count differs: {label}");
-    // `ParticleInstance`'s derived `PartialEq`, so a field added to it is
-    // compared without this test having to learn about it.
-    assert_eq!(a.buffer(), b.buffer(), "buffer differs: {label}");
+    // Bit patterns, not `PartialEq`: -0.0 == +0.0 would pass as equal.
+    assert_eq!(instance_bits(a.buffer()), instance_bits(b.buffer()), "buffer differs: {label}");
 }
 
 #[test]

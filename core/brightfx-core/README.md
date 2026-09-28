@@ -36,14 +36,18 @@ exactly once.
     is a pure function of `time`. No-op without a track.
 
     The snap tolerance grows with `time` (it tracks the f32 rounding of
-    `time` itself), which matters only for NTSC rates. Frames at 59.94,
-    29.97, and 23.976 fps sit a few thousandths of a step off the grid,
-    and from roughly 170–280 s onward (by rate) a frame just *after* a
-    grid point falls inside the tolerance and snaps down to it. The only
-    effect is that the particle state sits up to ~83 µs *before* `time`:
-    a trigger authored in that sliver snaps to the same grid point, so it
-    has still fired when the frame is rendered. Integer rates (24, 25, 30,
-    60 fps) land on or clear of the grid and are unaffected.
+    `time` itself), so a `time` just *after* a grid point can snap down
+    to it and leave the particle state slightly *before* `time` -- by at
+    most the tolerance, 80 µs at the 600 s track cap, about one f32 ULP
+    of `time` there. Triggers are unaffected: one authored in that sliver
+    snaps to the same grid point, so it has fired. In practice only NTSC
+    rates, whose frames sit a few thousandths of a step off the grid, hit
+    this: exact frame times (`n * 1001 / 60000` and so on) from 166.9 s at
+    59.94, 258.6 s at 23.976, and 283.6 s at 29.97 fps, never more than
+    70 µs early; hosts dividing by the decimals 59.94, 29.97, or 23.976
+    from 83 s, 150 s, and 41.7 s. Integer rates (24, 25, 30, 50, 60 fps)
+    land on the grid up to f32 rounding and never sit early of the frame
+    they mean.
   - `buffer() -> &[ParticleInstance]` — current particle instances to draw
     (position, size, rotation, normalized RGBA color).
   - `particle_count() -> usize`.

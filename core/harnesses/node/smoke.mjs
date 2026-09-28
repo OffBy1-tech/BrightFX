@@ -49,9 +49,13 @@ function assertBufferMatches(sim, { particleCount, buffer, tolerance }) {
   assert.equal(actual.length, buffer.length, "buffer length diverged");
   for (let i = 0; i < actual.length; i++) {
     // Finiteness is checked explicitly rather than left to the comparison
-    // happening to be written in the NaN-failing direction. The message is
-    // only built on failure: this loop runs over every float.
-    const ok = Number.isFinite(actual[i]) && Number.isFinite(buffer[i]) && Math.abs(actual[i] - buffer[i]) <= tolerance;
+    // happening to be written in the NaN-failing direction. At tolerance 0
+    // the property is bit-identical, so `Object.is`, which tells -0 from +0
+    // (for finite float32 values it is exactly a bit compare), as the Swift
+    // and C# helpers do. The message is only built on failure: this loop
+    // runs over every float.
+    const close = tolerance === 0 ? Object.is(actual[i], buffer[i]) : Math.abs(actual[i] - buffer[i]) <= tolerance;
+    const ok = Number.isFinite(actual[i]) && Number.isFinite(buffer[i]) && close;
     if (!ok) assert.fail(`float ${i} drifted or is not finite: got ${actual[i]}, expected ${buffer[i]}`);
   }
 }

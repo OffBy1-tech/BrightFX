@@ -281,11 +281,13 @@ impl Simulation {
     /// trigger authored at the very end of a track fires even though no
     /// frame time lands exactly on an off-grid duration.
     ///
-    /// The snap tolerance grows with `time`, so late in a long track a
-    /// `time` just *after* a grid point snaps down to it and the particle
-    /// state sits up to ~83 µs before `time`. Triggers are unaffected
-    /// (see `grid_step`). Only NTSC rates (59.94, 29.97, 23.976 fps) hit
-    /// this, from roughly 170-280 s depending on the rate.
+    /// The snap tolerance grows with `time`, so a `time` just *after* a
+    /// grid point can snap down to it and the particle state sits before
+    /// `time` -- by at most 80 µs, the tolerance at the 600 s cap.
+    /// Triggers are unaffected (see `grid_step`). In practice only NTSC
+    /// rates hit this: exact frame times from 166.9 s (59.94 fps), 258.6 s
+    /// (23.976), and 283.6 s (29.97); hosts dividing by the decimal rates
+    /// from 83 s, 41.7 s, and 150 s. The crate README has the detail.
     ///
     /// If the last call was a seek to an earlier or equal grid step, only
     /// the steps in between are applied; otherwise the simulation resets
@@ -1027,7 +1029,17 @@ mod tests {
         rewound.seek(0.5);
 
         assert!(fresh.particle_count() > 0, "test is vacuous with no particles");
-        assert_eq!(fresh.buffer().to_vec(), rewound.buffer().to_vec());
+        // Bitwise, so -0.0 and +0.0 count as different, as they do to the
+        // harnesses. Read as the flat floats a host sees, so every field
+        // is covered.
+        let bits = |sim: &Simulation| -> Vec<u32> {
+            let buffer = sim.buffer();
+            // SAFETY: `ParticleInstance` is `#[repr(C)]`, all `f32`, and 32
+            // bytes (asserted above), so this is `len * 8` initialized f32s.
+            let floats = unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<f32>(), buffer.len() * 8) };
+            floats.iter().map(|f| f.to_bits()).collect()
+        };
+        assert_eq!(bits(&fresh), bits(&rewound));
     }
 
     #[test]

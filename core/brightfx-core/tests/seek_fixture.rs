@@ -9,6 +9,7 @@
 
 mod common;
 
+use common::bits;
 use common::seek::{check_fixture, load_sim, run_protocol};
 
 const SEED: u64 = 42;
@@ -41,5 +42,5 @@ fn seeking_again_starts_over() {
     let mut fresh = load_sim(SEED);
     fresh.seek(SEEK_TIMES[SEEK_TIMES.len() - 1]);
     assert_eq!(fresh.particle_count(), count);
-    assert_eq!(fresh.buffer_slice(), &buffer[..]);
+    assert_eq!(bits(fresh.buffer_slice()), bits(&buffer), "not bit-identical");
 }
