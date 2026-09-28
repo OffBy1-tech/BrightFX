@@ -735,6 +735,63 @@ mod tests {
         assert_eq!(pixel(&turned, 41, 10, 20)[3], 255, "turned diamond is wide");
     }
 
+    /// Painted rows and columns (alpha over half) of a frame: (width, height).
+    fn painted_extent(f: &[u8], w: u32) -> (u32, u32) {
+        let (mut x0, mut x1, mut y0, mut y1) = (w, 0, w, 0);
+        for y in 0..w {
+            for x in 0..w {
+                if pixel(f, w, x, y)[3] > 127 {
+                    x0 = x0.min(x);
+                    x1 = x1.max(x);
+                    y0 = y0.min(y);
+                    y1 = y1.max(y);
+                }
+            }
+        }
+        (x1 + 1 - x0, y1 + 1 - y0)
+    }
+
+    #[test]
+    fn a_capsule_is_twice_its_size_long_and_a_2_3rd_of_that_wide() {
+        // size is the half-length, as for the diamond: size 20 is a 40 px
+        // capsule, 40 / 2.3 = 17.4 px across.
+        let f = render(ParticleShape::Capsule, BlendMode::SourceOver, &[particle(40.5, 40.5, 20.0, 0.0, RED)], 81, 81, 1.0);
+        let (w, h) = painted_extent(&f, 81);
+        assert!((39..=41).contains(&h), "capsule is {h} px long");
+        assert!((16..=19).contains(&w), "capsule is {w} px wide");
+    }
+
+    #[test]
+    fn a_capsule_has_round_ends_and_straight_sides() {
+        let f = render(ParticleShape::Capsule, BlendMode::SourceOver, &[particle(40.5, 40.5, 20.0, 0.0, RED)], 81, 81, 1.0);
+        // The half-width is 8.7: a side 7 px out is solid along the whole
+        // straight run (half-length 20 - 8.7 = 11.3), where a lens or a
+        // diamond would already be narrowing.
+        for dy in [-10i32, 0, 10] {
+            assert_eq!(pixel(&f, 81, 47, (40 + dy) as u32)[3], 255, "side at dy {dy}");
+        }
+        // The corners of the bounding box are cut away by the round ends.
+        assert_eq!(pixel(&f, 81, 47, 58)[3], 0, "bottom-right corner");
+        assert_eq!(pixel(&f, 81, 33, 22)[3], 0, "top-left corner");
+        // But the tip itself is painted.
+        assert_eq!(pixel(&f, 81, 40, 59)[3], 255, "bottom tip");
+    }
+
+    #[test]
+    fn a_quarter_turn_lays_a_capsule_on_its_side() {
+        let turned = render(
+            ParticleShape::Capsule,
+            BlendMode::SourceOver,
+            &[particle(40.5, 40.5, 20.0, std::f32::consts::FRAC_PI_2, RED)],
+            81,
+            81,
+            1.0,
+        );
+        let (w, h) = painted_extent(&turned, 81);
+        assert!((39..=41).contains(&w), "turned capsule is {w} px long");
+        assert!((16..=19).contains(&h), "turned capsule is {h} px tall");
+    }
+
     #[test]
     fn a_tiny_circle_still_paints_its_minimum_half_pixel_radius() {
         let f = render(ParticleShape::Circle, BlendMode::SourceOver, &[particle(20.5, 20.5, 0.01, 0.0, RED)], 40, 40, 1.0);

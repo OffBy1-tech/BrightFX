@@ -52,7 +52,7 @@ pub(crate) struct Contour {
 }
 
 /// Control-point distance for a quarter circle as cubic Bézier.
-const KAPPA: f32 = 0.552_284_8;
+pub(crate) const KAPPA: f32 = 0.552_284_8;
 
 /// Flattens a geometry through `transform` into polylines. `tolerance` is
 /// the largest allowed deviation from the true curve, in output units.

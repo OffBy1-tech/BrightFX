@@ -21,6 +21,9 @@ pub enum ParticleShape {
     SakuraPetal,
     Diamond,
     Rune,
+    /// A rounded rectangle 2.3 times as long as it is wide; `size` is its
+    /// half-length.
+    Capsule,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]

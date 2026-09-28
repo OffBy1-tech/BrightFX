@@ -284,6 +284,10 @@ pub fn sparkles() -> ParticleFxConfig {
 /// `scatter_sweep` at one height) rather than sweeping it, so spawn
 /// order does not line up across the frame either.
 ///
+/// The pieces are the component's capsules: `size` 10 is a capsule's
+/// half-length, so 20 px long and 20 / 2.3 = 8.7 px across. They spin at
+/// 0.035–0.1 rad/step, the component's 120–340°/s.
+///
 /// The fall is near the component's 2.2 s: 7.5–9 px/step with `gravityY`
 /// only 0.05, so the speed stays near constant and the rain does not
 /// crowd the top (density goes as 1 / speed). Turbulence 1.2 is the
@@ -302,7 +306,7 @@ pub fn sprinkle_rain() -> ParticleFxConfig {
         scatter_sweep(-20.0, -20.0, 0.1),
     );
     c.emitter = emitter(0.9, 30, EmissionPattern::DirectionalCone, 90.0, 20.0);
-    c.shape = ParticleShape::ShardCrystal;
+    c.shape = ParticleShape::Capsule;
     c.blend_mode = BlendMode::SourceOver;
     c.glow_bloom = false;
     c.initial_speed_min = 7.5;
@@ -310,13 +314,13 @@ pub fn sprinkle_rain() -> ParticleFxConfig {
     c.gravity_y = 0.05;
     c.drag = 1.0;
     c.turbulence = 1.2;
-    c.rotation_speed_min = 0.04;
+    c.rotation_speed_min = 0.035;
     c.rotation_speed_max = 0.1;
     c.lifetime_min = 300.0;
     c.lifetime_max = 300.0;
-    c.start_size = 8.0;
-    c.peak_size = 8.0;
-    c.end_size = 8.0;
+    c.start_size = 10.0;
+    c.peak_size = 10.0;
+    c.end_size = 10.0;
     c.size_curve = SizeCurve::Constant;
     c.color_mode = ColorMode::RandomPalette;
     c.color_stops = palette(&RAINBOW);
@@ -327,13 +331,17 @@ pub fn sprinkle_rain() -> ParticleFxConfig {
 }
 
 /// Pink frosting drops raining from the top edge: `FrostingRain`, 80
-/// rounded pieces. Rounder, larger, and denser than the sprinkles, which
-/// is what separates the two rains on screen.
+/// capsules of 9×20 px. The same shape and spin as the sprinkles; the
+/// soft palette and the slower fall are what separate the two rains.
+/// `size` 10–11 is the capsule's half-length, so 20–22 px long and
+/// 8.7–9.6 px across.
 ///
 /// Denser rather than bigger is what reads as frosting at full-frame
-/// scale (#6): ~180 drops in a 1920×1080 frame at 10–11 px. 35–45 at
-/// 8–9 px all but vanished against a pink background plate, and going
-/// the other way -- 15–16 px -- turned the drops into large white bubbles.
+/// scale (#6): ~180 drops in a 1920×1080 frame, over twice the
+/// component's count. Its first round, as 8–9 px dots, 35–45 of them all
+/// but vanished against a pink background plate, and 15–16 px dots read
+/// as large white bubbles; at the component's own capsule size, the
+/// count is what carries it.
 ///
 /// The fall is the component's: a 1080 px frame in about 2.2 s at a near
 /// constant 7–8.5 px/step, and a 300-step life so the slowest drop still
@@ -359,7 +367,7 @@ pub fn frosting_rain() -> ParticleFxConfig {
         sweep_track((0.0, -20.0), (FRAME_W, -20.0), 0.5, TRACK_DURATION),
     );
     c.emitter = emitter(1.35, 30, EmissionPattern::DirectionalCone, 90.0, 15.0);
-    c.shape = ParticleShape::Circle;
+    c.shape = ParticleShape::Capsule;
     c.blend_mode = BlendMode::SourceOver;
     c.glow_bloom = false;
     c.initial_speed_min = 7.0;
@@ -367,6 +375,8 @@ pub fn frosting_rain() -> ParticleFxConfig {
     c.gravity_y = 0.05;
     c.drag = 1.0;
     c.turbulence = 0.8;
+    c.rotation_speed_min = 0.035;
+    c.rotation_speed_max = 0.1;
     c.lifetime_min = 290.0;
     c.lifetime_max = 300.0;
     c.start_size = 10.0;

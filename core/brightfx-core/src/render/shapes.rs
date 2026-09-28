@@ -1,8 +1,9 @@
-//! The 13 particle shapes, ported layer for layer from Mouseflare's
-//! `customFxRenderer.ts`. Coordinates are in units of the particle size `s`.
+//! The 14 particle shapes: 13 ported layer for layer from Mouseflare's
+//! `customFxRenderer.ts`, plus the capsule, which BrightFX added for its
+//! rain presets. Coordinates are in units of the particle size `s`.
 
 use super::paint::{GradientColor, Paint};
-use super::path::{Geometry, PathCmd};
+use super::path::{Geometry, PathCmd, KAPPA};
 use crate::schema::ParticleShape;
 
 pub(crate) enum Op {
@@ -33,7 +34,7 @@ pub(crate) struct Shape {
 }
 
 #[cfg(test)]
-pub(crate) const ALL: [ParticleShape; 13] = [
+pub(crate) const ALL: [ParticleShape; 14] = [
     ParticleShape::Circle,
     ParticleShape::SparkleStar,
     ParticleShape::GlowDisc,
@@ -47,6 +48,7 @@ pub(crate) const ALL: [ParticleShape; 13] = [
     ParticleShape::SakuraPetal,
     ParticleShape::Diamond,
     ParticleShape::Rune,
+    ParticleShape::Capsule,
 ];
 
 const fn fill(geometry: Geometry, paint: Paint) -> Layer {
@@ -240,6 +242,35 @@ static DIAMOND: Shape = Shape {
     )],
 };
 
+/// Half the capsule's width, in units of `s`: a 2.3:1 length to width,
+/// the ratio between the 8×20 and 9×20 px capsules the rain presets
+/// replaced. `s` is the half-length, as for the diamond, so the tips sit
+/// at y = ±1 and each round end is a half circle of this radius.
+const CAPSULE_R: f32 = 1.0 / 2.3;
+/// Half the straight run between the two round ends.
+const CAPSULE_H: f32 = 1.0 - CAPSULE_R;
+/// Control-point offset for a quarter circle of `CAPSULE_R` as a cubic.
+const CAPSULE_K: f32 = KAPPA * CAPSULE_R;
+
+static CAPSULE: Shape = Shape {
+    extent: 1.0,
+    min_size: 0.0,
+    symmetric: false,
+    layers: &[fill(
+        Geometry::Path(&[
+            Move(CAPSULE_R, -CAPSULE_H),
+            Line(CAPSULE_R, CAPSULE_H),
+            Cubic(CAPSULE_R, CAPSULE_H + CAPSULE_K, CAPSULE_K, 1.0, 0.0, 1.0),
+            Cubic(-CAPSULE_K, 1.0, -CAPSULE_R, CAPSULE_H + CAPSULE_K, -CAPSULE_R, CAPSULE_H),
+            Line(-CAPSULE_R, -CAPSULE_H),
+            Cubic(-CAPSULE_R, -CAPSULE_H - CAPSULE_K, -CAPSULE_K, -1.0, 0.0, -1.0),
+            Cubic(CAPSULE_K, -1.0, CAPSULE_R, -CAPSULE_H - CAPSULE_K, CAPSULE_R, -CAPSULE_H),
+            Close,
+        ]),
+        Paint::Tint,
+    )],
+};
+
 pub(crate) fn shape_for(shape: ParticleShape) -> &'static Shape {
     match shape {
         ParticleShape::Circle => &CIRCLE,
@@ -255,6 +286,7 @@ pub(crate) fn shape_for(shape: ParticleShape) -> &'static Shape {
         ParticleShape::SakuraPetal => &SAKURA_PETAL,
         ParticleShape::Diamond => &DIAMOND,
         ParticleShape::Rune => &RUNE,
+        ParticleShape::Capsule => &CAPSULE,
     }
 }
 

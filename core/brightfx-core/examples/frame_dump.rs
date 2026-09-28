@@ -10,7 +10,7 @@ use brightfx_core::render::Renderer;
 use brightfx_core::{BlendMode, ParticleFxConfig, ParticleInstance, ParticleShape};
 use std::path::Path;
 
-const SHAPES: [ParticleShape; 13] = [
+const SHAPES: [ParticleShape; 14] = [
     ParticleShape::Circle,
     ParticleShape::SparkleStar,
     ParticleShape::GlowDisc,
@@ -24,6 +24,7 @@ const SHAPES: [ParticleShape; 13] = [
     ParticleShape::SakuraPetal,
     ParticleShape::Diamond,
     ParticleShape::Rune,
+    ParticleShape::Capsule,
 ];
 
 fn write(dir: &Path, name: &str, frame: &[u8]) {
