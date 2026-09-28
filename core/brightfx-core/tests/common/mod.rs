@@ -10,3 +10,9 @@
 /// straddle a rounding boundary. Same cause everywhere, so one value: the
 /// fixture tests record it in their JSON and the harnesses read it back.
 pub const LIBM_DRIFT_TOLERANCE: f32 = 2e-3;
+
+/// The two seek fixtures share a config, a protocol, and a file format;
+/// only the seek times and the file they record to differ. Unused by the
+/// other test crates that pull in `common`, hence the allow.
+#[allow(dead_code)]
+pub mod seek;

@@ -14,13 +14,6 @@ fn track_config() -> ParticleFxConfig {
     serde_json::from_str(&std::fs::read_to_string(path).expect("seek fixture config missing")).unwrap()
 }
 
-fn snapshot(sim: &Simulation) -> Vec<f32> {
-    sim.buffer()
-        .iter()
-        .flat_map(|p| [p.x, p.y, p.size, p.rotation, p.color[0], p.color[1], p.color[2], p.color[3]])
-        .collect()
-}
-
 fn fresh_at(time: f32) -> Simulation {
     let mut sim = Simulation::new(track_config(), SEED);
     sim.seek(time);
@@ -29,7 +22,9 @@ fn fresh_at(time: f32) -> Simulation {
 
 fn assert_same(a: &Simulation, b: &Simulation, label: &str) {
     assert_eq!(a.particle_count(), b.particle_count(), "particle count differs: {label}");
-    assert_eq!(snapshot(a), snapshot(b), "buffer differs: {label}");
+    // `ParticleInstance`'s derived `PartialEq`, so a field added to it is
+    // compared without this test having to learn about it.
+    assert_eq!(a.buffer(), b.buffer(), "buffer differs: {label}");
 }
 
 #[test]
