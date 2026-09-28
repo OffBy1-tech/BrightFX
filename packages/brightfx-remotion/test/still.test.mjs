@@ -35,9 +35,9 @@ function still(id) {
 
 const engine = await BrightFX.init(readFileSync(join(pkg, "..", "brightfx-js", "wasm", "brightfx_wasm_bg.wasm")));
 
-function referenceSim() {
+function referenceSim(effect = config) {
   const sim = engine.create(SEED);
-  assert.equal(sim.setConfig(config).ok, true);
+  assert.equal(sim.setConfig(effect).ok, true);
   assert.equal(sim.setViewport(W, H, 1).ok, true);
   sim.seek(FRAME / FPS);
   return sim;
@@ -85,4 +85,46 @@ test("sprite mode still has a glyph at every visible particle", () => {
     );
   }
   sim.dispose();
+});
+
+// The probe compositions reveal a 6x6 blue square in the bottom-right
+// corner, clear of the fixture's particles, whenever the component calls
+// `render()` or `frame()` (see test/src/Root.tsx).
+const isProbe = (png) => {
+  const i = ((H - 3) * W + (W - 3)) * 4;
+  return png.data[i] < 60 && png.data[i + 1] < 60 && png.data[i + 2] > 200 && png.data[i + 3] > 200;
+};
+
+test("frame mode skips rasterizing a frame with no particles and draws nothing", () => {
+  const sim = referenceSim({
+    ...config,
+    emitterTrack: {
+      ...config.emitterTrack,
+      triggers: [
+        { time: 1.5, kind: "startContinuous" },
+        { time: 1.8, kind: "burst" },
+      ],
+    },
+  });
+  assert.equal(sim.particleCount(), 0, "test is vacuous: the late effect has particles at the still's time");
+  sim.dispose();
+
+  const png = still("EmptyFrameTest");
+  assert.ok(!isProbe(png), "render() or frame() ran for a frame with no particles");
+  let painted = 0;
+  for (let i = 3; i < png.data.length; i += 4) if (png.data[i] > 0) painted++;
+  assert.equal(painted, 0, `${painted} pixels drawn for a frame with no particles`);
+});
+
+test("frame mode still rasterizes and draws a frame with particles", () => {
+  const png = still("ActiveFrameProbeTest");
+  assert.ok(isProbe(png), "render()/frame() never ran: the probe is not wired, so the empty-frame test proves nothing");
+  let painted = 0;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (x >= W - 8 && y >= H - 8) continue;
+      if (png.data[(y * W + x) * 4 + 3] > 0) painted++;
+    }
+  }
+  assert.ok(painted > 200, `only ${painted} particle pixels drawn`);
 });

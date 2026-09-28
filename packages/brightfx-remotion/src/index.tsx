@@ -1,6 +1,7 @@
 // brightfx-remotion: translates Remotion's clock and composition size into
 // wrapper calls. No behavior of its own -- what particles do is decided by
-// the effect config, the core, and the tracks crate.
+// the effect config, the core, and the tracks crate. The one thing it
+// decides is cost: a frame with no particles is not rasterized.
 //
 // Determinism: each Remotion tab holds its own wasm instance and each
 // component instance its own simulation, replayed from its own seed and
@@ -25,7 +26,10 @@ export interface BrightFXProps {
   seed?: number;
   /** 0..1 opacity multiplier; the compositions' existing "amount" values. */
   amount?: number;
-  /** Seconds; outside it nothing renders and no seek happens. */
+  /** Seconds; outside it nothing renders and no seek happens. Optional:
+   *  a frame with no particles already skips rasterizing, so an effect can
+   *  stay mounted through quiet stretches. Don't end it at an effect's
+   *  last trigger -- that cuts off the particles still alive after it. */
   window?: [number, number];
   /** `frame`: blit the rasterized frame. `sprite`: call `render` per particle. */
   mode?: "frame" | "sprite";
@@ -123,10 +127,15 @@ export const BrightFX: React.FC<BrightFXProps> = ({
 
   // Seeking happens during render so the output is a function of `time`
   // alone. Forward seeks step from the previous frame; a skipped frame
-  // (invisible) just makes the next step longer.
+  // (invisible) just makes the next step longer. The seek always runs;
+  // rasterizing, copying, and unpremultiplying a full frame is skipped
+  // when there is nothing in it -- the bulk of an effect's timeline
+  // between cues. A poisoned sim also reports no particles, so it falls
+  // through to `frame()` and the empty-frame check below fails the render.
   const pixels = useMemo(() => {
     if (!sim || !visible || mode !== "frame") return null;
     sim.seek(time);
+    if (sim.particleCount() === 0 && !sim.isPoisoned()) return null;
     sim.render();
     return sim.frame();
   }, [sim, visible, mode, time]);
@@ -159,6 +168,7 @@ export const BrightFX: React.FC<BrightFXProps> = ({
 
   if (mode === "sprite") {
     if (!render) throw new Error("BrightFX: sprite mode needs a render prop");
+    if (particles.length === 0) return null;
     return (
       <AbsoluteFill style={{ pointerEvents: "none", opacity: amount, ...style }}>
         {particles.map((p, i) => (
@@ -172,6 +182,10 @@ export const BrightFX: React.FC<BrightFXProps> = ({
       </AbsoluteFill>
     );
   }
+
+  // No pixels means an empty frame: unmount the canvas rather than leave
+  // the previous frame's drawing on it.
+  if (!pixels) return null;
 
   return (
     <AbsoluteFill style={{ pointerEvents: "none", opacity: amount, ...style }}>

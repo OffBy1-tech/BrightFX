@@ -75,11 +75,19 @@ Sprite mode calls `render` once per particle instead:
 | `effect` | `EffectConfig` | required | Must carry an `emitterTrack` — baked playback needs one. |
 | `seed` | `number` | `1` | Passed to `BrightFX.create`. |
 | `amount` | `number` | `1` | 0..1 opacity multiplier; at or below `0.02` the component renders nothing and skips the seek. |
-| `window` | `[number, number]` | — | Seconds; outside it nothing renders and no seek happens. |
+| `window` | `[number, number]` | — | Seconds; outside it nothing renders and no seek happens. Optional — see [Empty frames](#empty-frames). |
 | `mode` | `"frame" \| "sprite"` | `"frame"` | `frame` blits the rasterized frame; `sprite` calls `render` per particle. |
 | `render` | `(particle, index) => ReactNode` | — | Required in sprite mode. |
 | `wasmSrc` | `string` | `staticFile(DEFAULT_WASM_PATH)` | Overrides where the wasm is fetched from. |
 | `style` | `CSSProperties` | — | Merged onto the wrapping `AbsoluteFill`. |
+
+## Empty frames
+
+A frame with no particles costs a seek and nothing else: frame mode skips
+rasterizing and drawing it, and neither mode renders any element. An effect
+can stay mounted through the quiet stretches of a song, so there is no need
+to gate a job with `window` by the span of its triggers. Ending `window` at
+the last trigger would cut off the particles still alive after it.
 
 ## Sprite mode's unstable key
 

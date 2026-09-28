@@ -5,6 +5,11 @@
 //! and this crate does not: where each character's card sits, where the
 //! lineup stands, and each character's accent color. Every job has exactly
 //! one position, so its track is a single keyframe plus triggers.
+//!
+//! A host can mount every job for the whole song: `brightfx-remotion`
+//! skips rasterizing frames with no particles, so the gaps between a job's
+//! triggers cost only a seek. Gating a job at its last trigger would cut
+//! off the particles still alive after it.
 
 use std::collections::BTreeMap;
 
