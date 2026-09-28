@@ -34,6 +34,16 @@ exactly once.
     `trigger_burst`, `set_emitter`, or `set_config` since) resets and
     replays from t=0. Both paths run the same whole steps, so the buffer
     is a pure function of `time`. No-op without a track.
+
+    The snap tolerance grows with `time` (it tracks the f32 rounding of
+    `time` itself), which matters only for NTSC rates. Frames at 59.94,
+    29.97, and 23.976 fps sit a few thousandths of a step off the grid,
+    and from roughly 170–280 s onward (by rate) a frame just *after* a
+    grid point falls inside the tolerance and snaps down to it: the
+    simulation then sits up to ~85 µs *before* `time`, the one exception
+    to "never late". Only a trigger authored inside that sliver fires a
+    frame late. Integer rates (24, 25, 30, 60 fps) land on or clear of the
+    grid and are unaffected.
   - `buffer() -> &[ParticleInstance]` — current particle instances to draw
     (position, size, rotation, normalized RGBA color).
   - `particle_count() -> usize`.
