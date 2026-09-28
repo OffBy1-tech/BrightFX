@@ -90,7 +90,7 @@ fn the_frame_matches_the_recorded_expectation() {
     let json_path = fixtures_dir().join("ffi-frame.expected.json");
     let rgba_path = fixtures_dir().join("ffi-frame.expected.rgba");
 
-    if std::env::var("BRIGHTFX_REGENERATE").is_ok() {
+    if std::env::var("BRIGHTFX_REGENERATE").as_deref() == Ok("1") {
         let json = serde_json::json!({
             "seed": SEED,
             "frames": FRAMES,

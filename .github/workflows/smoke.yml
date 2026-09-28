@@ -10,10 +10,10 @@
 #
 # Two rules this workflow must keep:
 #
-# 1. Never set BRIGHTFX_REGENERATE. With it set, the fixture test silently
-#    re-baselines instead of verifying and reports success. Regeneration is
+# 1. Never set BRIGHTFX_REGENERATE. Set to 1, the fixture tests silently
+#    re-baseline instead of verifying and report success. Regeneration is
 #    a manual, human-reviewed step; the first job step refuses to run if the
-#    variable has leaked in from anywhere.
+#    variable has leaked in from anywhere, whatever its value.
 # 2. cbindgen stays pinned. An unpinned version produces cosmetic churn in
 #    the generated header, which trips the staleness guard with a failure
 #    that looks like an ABI change but is not. The pin lives in one place

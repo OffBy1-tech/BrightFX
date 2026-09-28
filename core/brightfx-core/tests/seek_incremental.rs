@@ -3,14 +3,16 @@
 //! bit-identical to a from-zero seek on a fresh handle, and anything that
 //! is not a seek forces the next seek to replay.
 
+mod common;
+
 use brightfx_core::schema::{EmitterKeyframe, EmitterTrigger, TriggerKind};
 use brightfx_core::{ParticleFxConfig, Simulation};
-use std::path::PathBuf;
+use common::fixtures_dir;
 
 const SEED: u64 = 42;
 
 fn track_config() -> ParticleFxConfig {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fixtures/ffi-seek.config.json");
+    let path = fixtures_dir().join("ffi-seek.config.json");
     serde_json::from_str(&std::fs::read_to_string(path).expect("seek fixture config missing")).unwrap()
 }
 
