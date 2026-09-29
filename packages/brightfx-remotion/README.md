@@ -13,7 +13,7 @@ that dependency from a lone `brightfx-remotion` tarball, so install both
 tarballs **in the same `npm install` command**:
 
 ```bash
-npm install ./vendor/brightfx-js-0.1.0.tgz ./vendor/brightfx-remotion-0.1.0.tgz
+npm install ./vendor/brightfx-js-0.1.0.tgz ./vendor/brightfx-remotion-0.2.0.tgz
 ```
 
 Then copy (never symlink) the wasm binary into your `public/` directory,
@@ -75,11 +75,27 @@ Sprite mode calls `render` once per particle instead:
 | `effect` | `EffectConfig` | required | Must carry an `emitterTrack` — baked playback needs one. |
 | `seed` | `number` | `1` | Passed to `BrightFX.create`. |
 | `amount` | `number` | `1` | 0..1 opacity multiplier; at or below `0.02` the component renders nothing and skips the seek. |
-| `window` | `[number, number]` | — | Seconds; outside it nothing renders and no seek happens. |
+| `window` | `[number, number]` | — | Seconds; outside it nothing renders and no seek happens. Often optional — see [Empty frames](#empty-frames). |
 | `mode` | `"frame" \| "sprite"` | `"frame"` | `frame` blits the rasterized frame; `sprite` calls `render` per particle. |
 | `render` | `(particle, index) => ReactNode` | — | Required in sprite mode. |
 | `wasmSrc` | `string` | `staticFile(DEFAULT_WASM_PATH)` | Overrides where the wasm is fetched from. |
 | `style` | `CSSProperties` | — | Merged onto the wrapping `AbsoluteFill`. |
+
+## Empty frames
+
+A frame with no particles costs a seek and nothing else: frame mode skips
+rasterizing and drawing it, and neither mode renders any particle element
+(the wrapper carrying `style` and `amount` stays). For an effect with
+`spawnRateIdle` 0, quiet stretches between its cues are such frames, so it
+can stay mounted and there is no need to gate it with `window` by the span
+of its triggers. An effect with idle emission spawns between cues, so it
+rarely skips a frame, and dropping `window` shows those idle particles.
+
+Either way, don't end `window` at an effect's last trigger: its particles
+outlive that trigger by up to `lifetimeMax / 60` seconds, and gating there
+cuts them off. Past the emitter track's `duration` (at most 600 s) the
+component renders nothing and skips the seek, since every later time would
+replay the track's last state frozen.
 
 ## Sprite mode's unstable key
 

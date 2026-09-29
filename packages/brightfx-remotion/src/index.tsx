@@ -1,6 +1,8 @@
 // brightfx-remotion: translates Remotion's clock and composition size into
 // wrapper calls. No behavior of its own -- what particles do is decided by
-// the effect config, the core, and the tracks crate.
+// the effect config, the core, and the tracks crate. What it does decide
+// is cost: a frame with no particles is not rasterized, and a frame past
+// the track's end is not even seeked.
 //
 // Determinism: each Remotion tab holds its own wasm instance and each
 // component instance its own simulation, replayed from its own seed and
@@ -19,13 +21,25 @@ export const DEFAULT_WASM_PATH = "brightfx/brightfx_wasm_bg.wasm";
  *  matching the compositions' existing `amount <= 0.02` early return. */
 export const VISIBLE_THRESHOLD = 0.02;
 
+/** The core's `MAX_EMITTER_TRACK_DURATION`, in seconds. `seek` clamps its
+ *  time to `min(emitterTrack.duration, this)`, so any later time replays
+ *  the track's last state; brightfx-js does not export the constant. */
+const MAX_EMITTER_TRACK_DURATION = 600;
+
 export interface BrightFXProps {
   /** A complete effect config carrying an `emitterTrack`. */
   effect: EffectConfig;
   seed?: number;
   /** 0..1 opacity multiplier; the compositions' existing "amount" values. */
   amount?: number;
-  /** Seconds; outside it nothing renders and no seek happens. */
+  /** Seconds; outside it nothing renders and no seek happens. For an
+   *  effect with `spawnRateIdle` 0 it is optional: a frame with no
+   *  particles skips rasterizing, so the effect can stay mounted through
+   *  its quiet stretches. An effect with idle emission spawns between
+   *  cues, so it rarely skips, and without `window` those idle particles
+   *  show. Either way, don't end it at an effect's last trigger -- that
+   *  cuts off the particles still alive after it. Past the emitter
+   *  track's duration nothing renders, window or not. */
   window?: [number, number];
   /** `frame`: blit the rasterized frame. `sprite`: call `render` per particle. */
   mode?: "frame" | "sprite";
@@ -119,14 +133,21 @@ export const BrightFX: React.FC<BrightFXProps> = ({
 
   const time = frame / fps;
   const inWindow = !timeWindow || (time >= timeWindow[0] && time < timeWindow[1]);
-  const visible = amount > VISIBLE_THRESHOLD && inWindow;
+  // Strictly past the end: the frame at exactly `duration` is the track's
+  // real final state, every later one a frozen replay of it.
+  const trackEnd = Math.min(effect.emitterTrack?.duration ?? Infinity, MAX_EMITTER_TRACK_DURATION);
+  const visible = amount > VISIBLE_THRESHOLD && inWindow && time <= trackEnd;
 
   // Seeking happens during render so the output is a function of `time`
   // alone. Forward seeks step from the previous frame; a skipped frame
-  // (invisible) just makes the next step longer.
+  // (invisible) just makes the next step longer. Every visible frame is
+  // seeked; rasterizing, copying, and unpremultiplying a full frame is
+  // skipped when the seek leaves no particles -- for an effect without
+  // idle emission, most of its timeline between cues.
   const pixels = useMemo(() => {
     if (!sim || !visible || mode !== "frame") return null;
     sim.seek(time);
+    if (sim.particleCount() === 0) return null;
     sim.render();
     return sim.frame();
   }, [sim, visible, mode, time]);
@@ -141,8 +162,10 @@ export const BrightFX: React.FC<BrightFXProps> = ({
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !pixels) return;
+    // A rendered frame that is 0x0 or short is a broken viewport, not a
+    // frame with no particles (those never reach here: `pixels` is null).
     if (pixels.width === 0 || pixels.height === 0 || pixels.data.length !== pixels.width * pixels.height * 4) {
-      cancelRender(new Error("BrightFX: no frame to draw (simulation poisoned or viewport unset)"));
+      cancelRender(new Error("BrightFX: rendered frame is 0x0 or truncated (viewport unset?)"));
       return;
     }
     const ctx = canvas.getContext("2d");
@@ -157,6 +180,9 @@ export const BrightFX: React.FC<BrightFXProps> = ({
 
   if (!sim || !visible) return null;
 
+  // The wrapper stays mounted on every visible frame, since it carries the
+  // host's `style` and `opacity`; only its contents come and go with the
+  // particles.
   if (mode === "sprite") {
     if (!render) throw new Error("BrightFX: sprite mode needs a render prop");
     return (
@@ -173,9 +199,11 @@ export const BrightFX: React.FC<BrightFXProps> = ({
     );
   }
 
+  // No pixels means no particles: unmount the canvas rather than leave the
+  // previous frame's drawing on it.
   return (
     <AbsoluteFill style={{ pointerEvents: "none", opacity: amount, ...style }}>
-      <canvas ref={canvasRef} width={width} height={height} style={{ width, height }} />
+      {pixels && <canvas ref={canvasRef} width={width} height={height} style={{ width, height }} />}
     </AbsoluteFill>
   );
 };

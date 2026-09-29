@@ -1,6 +1,6 @@
 {
   "name": "brightfx-remotion",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A Remotion component that renders a BrightFX effect from the frame clock",
   "license": "MIT",
   "type": "module",
