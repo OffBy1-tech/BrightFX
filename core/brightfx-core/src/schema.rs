@@ -1,9 +1,16 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// The config schema version this build reads and writes. `AbiSimulation`
-/// rejects any config declaring a different version.
-pub const SCHEMA_VERSION: u32 = 1;
+/// The config schema version this build writes. Version 2 added the
+/// `random-palette` colour mode and the `capsule` shape; nothing was
+/// renamed or removed, so a version 1 config is a valid version 2 body.
+pub const SCHEMA_VERSION: u32 = 2;
+
+/// The oldest config schema version this build still reads. `AbiSimulation`
+/// accepts `MIN_SCHEMA_VERSION..=SCHEMA_VERSION`, migrates an older config
+/// forward on load, and rejects anything else -- so a build that predates
+/// a version reports "unsupported schemaVersion" rather than misreading it.
+pub const MIN_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -54,8 +61,9 @@ pub enum ColorMode {
     RainbowCycle,
     SpeedResponsive,
     MultiPalette,
-    /// Each particle takes one `color_stops` entry at spawn, picked
-    /// uniformly by the seeded RNG, and keeps it for life.
+    /// Each particle is dealt one `color_stops` entry, uniformly, and keeps
+    /// it for life. Offsets do not weight the pick; they set the order the
+    /// stops are dealt from, which is what a live stop edit follows.
     RandomPalette,
 }
 
@@ -368,7 +376,7 @@ mod tests {
 
     fn example_config() -> ParticleFxConfig {
         ParticleFxConfig {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             id: "test-fx".into(),
             name: "Test FX".into(),
             category: Category::Elemental,

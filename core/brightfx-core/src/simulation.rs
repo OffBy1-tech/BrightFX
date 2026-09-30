@@ -1,4 +1,4 @@
-use crate::color::{hex_to_rgb, hsl_to_rgb, interpolate_hex, sample_palette, Palette};
+use crate::color::{hex_to_rgb, hsl_to_rgb, interpolate_hex, palette_index, sample_palette, Palette};
 use crate::particle::{Particle, ParticlePool, MAX_PARTICLES};
 use crate::rng::Rng;
 use crate::schema::{
@@ -124,7 +124,12 @@ pub struct Simulation {
     baked_track: Option<Arc<BakedTrack>>,
     seed: u64,
     pool: ParticlePool,
+    /// Drives every motion draw: speed, angle, life, jitter, rotation.
     rng: Rng,
+    /// Drives the palette pick, and nothing else. Separate from `rng` so
+    /// a colour-only config change never shifts a motion draw, and reset
+    /// with it so a replay deals the same colours.
+    color_rng: Rng,
     spawn_budget: f32,
     global_hue: f32,
     emitter_x: f32,
@@ -150,6 +155,7 @@ impl Simulation {
             seed,
             pool: ParticlePool::new(MAX_PARTICLES),
             rng: Rng::new(seed),
+            color_rng: color_rng(seed),
             spawn_budget: 0.0,
             global_hue: 0.0,
             emitter_x: 0.0,
@@ -260,6 +266,7 @@ impl Simulation {
         self.leave_baked();
         self.pool.clear();
         self.rng = Rng::new(self.seed);
+        self.color_rng = color_rng(self.seed);
         self.spawn_budget = 0.0;
         self.global_hue = 0.0;
         self.buffer.clear();
@@ -497,16 +504,14 @@ impl Simulation {
             .range(self.config.lifetime_min, self.config.lifetime_max);
 
         self.global_hue = (self.global_hue + self.config.rainbow_speed * 0.5) % 360.0;
-        // The palette pick draws from the RNG only in its own mode, so every
-        // other mode keeps the random sequence it has always had.
-        let color_rgb = match self.config.color_mode {
-            ColorMode::RainbowCycle => hsl_to_rgb(self.global_hue, 0.9, 0.6),
-            ColorMode::RandomPalette if !self.palette.is_empty() => {
-                let i = (self.rng.f32() * self.palette.len() as f32) as usize;
-                self.palette[i.min(self.palette.len() - 1)].1
-            }
-            _ => hex_to_rgb(&self.config.primary_color),
+        let color_rgb = if self.config.color_mode == ColorMode::RainbowCycle {
+            hsl_to_rgb(self.global_hue, 0.9, 0.6)
+        } else {
+            hex_to_rgb(&self.config.primary_color)
         };
+        // Drawn in every mode, so switching into random-palette later finds
+        // a pick already on every live particle.
+        let palette_pick = self.color_rng.f32();
 
         let rotation_speed = self
             .rng
@@ -526,6 +531,7 @@ impl Simulation {
             peak_alpha: self.config.peak_alpha,
             end_alpha: self.config.end_alpha,
             color_rgb,
+            palette_pick,
             hue: self.global_hue,
             life: 0.0,
             max_life,
@@ -565,6 +571,9 @@ impl Simulation {
                     interpolate_hex(primary, accent, speed_ratio)
                 }
                 ColorMode::MultiPalette if !palette.is_empty() => sample_palette(palette, progress),
+                ColorMode::RandomPalette if !palette.is_empty() => {
+                    palette[palette_index(p.palette_pick, palette.len())].1
+                }
                 ColorMode::Single | ColorMode::MultiPalette | ColorMode::RandomPalette => p.color_rgb,
             };
 
@@ -633,6 +642,14 @@ fn sample_track(kfs: &[EmitterKeyframe], t: f32) -> (f32, f32, f32, f32) {
     (k.x, k.y, k.vx.unwrap_or(0.0), k.vy.unwrap_or(0.0))
 }
 
+/// Mixed into the seed for the colour RNG, so its sequence is unrelated to
+/// the motion RNG's while both still follow from the one seed a host sets.
+const COLOR_SEED_SALT: u64 = 0xC0_10_52_5E_ED_00_00_01;
+
+fn color_rng(seed: u64) -> Rng {
+    Rng::new(seed ^ COLOR_SEED_SALT)
+}
+
 /// Parses `config.color_stops` into a sorted `Palette`. Offsets are
 /// clamped into [0, 1] here as well as in `clamp_to_bounds`, so a config
 /// that skipped clamping still samples sanely.
@@ -684,7 +701,7 @@ mod tests {
     /// tests can turn on exactly the one term they're exercising.
     fn base_config() -> ParticleFxConfig {
         ParticleFxConfig {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             id: "test".into(),
             name: "Test".into(),
             category: Category::Custom,
@@ -1123,7 +1140,130 @@ mod tests {
 
         assert_eq!(fresh.particle_count(), 30, "test is vacuous without the burst");
         assert_eq!(fresh.buffer().to_vec(), rewound.buffer().to_vec());
-        assert!(colors(&fresh).windows(2).any(|w| w[0] != w[1]), "every particle got one stop");
+        assert!(
+            colors(&fresh).windows(2).any(|w| w[0] != w[1]),
+            "all 30 particles were dealt the same stop, so the pick is not random"
+        );
+    }
+
+    /// A config whose every RNG-driven motion field is a range, so a
+    /// shifted random sequence would show in the positions.
+    fn motion_config() -> ParticleFxConfig {
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 2.5;
+        config.emitter.emission_spread = 90.0;
+        config.initial_speed_min = 1.0;
+        config.initial_speed_max = 4.0;
+        config.turbulence = 1.0;
+        config.rotation_speed_min = 0.01;
+        config.rotation_speed_max = 0.1;
+        config.lifetime_min = 80.0;
+        config.lifetime_max = 120.0;
+        config.primary_color = "#ffffff".into();
+        config
+    }
+
+    fn with_colors(mut config: ParticleFxConfig, mode: ColorMode, stops: Option<Vec<ColorStop>>) -> ParticleFxConfig {
+        config.color_mode = mode;
+        config.color_stops = stops;
+        config
+    }
+
+    fn rgb_stops() -> Option<Vec<ColorStop>> {
+        Some(vec![stop(0.0, "#ff0000"), stop(0.5, "#00ff00"), stop(1.0, "#0000ff")])
+    }
+
+    /// Everything about each particle except its colour.
+    fn motion(sim: &Simulation) -> Vec<[f32; 4]> {
+        sim.buffer().iter().map(|p| [p.x, p.y, p.size, p.rotation]).collect()
+    }
+
+    fn run(sim: &mut Simulation, ticks: usize) {
+        sim.set_emitter(50.0, 50.0, 0.0, 0.0, true);
+        for _ in 0..ticks {
+            sim.advance(TICK);
+        }
+    }
+
+    #[test]
+    fn the_colour_mode_and_stops_never_move_a_particle() {
+        // Colour and motion draw from separate RNGs, so switching a config
+        // into random-palette, or giving it its first stop, leaves every
+        // particle exactly where it would have been.
+        let reference = {
+            let mut sim = Simulation::new(with_colors(motion_config(), ColorMode::MultiPalette, rgb_stops()), 9);
+            run(&mut sim, 90);
+            motion(&sim)
+        };
+        assert!(reference.len() > 100, "test is vacuous with {} particles", reference.len());
+        for (mode, stops) in [
+            (ColorMode::RandomPalette, rgb_stops()),
+            (ColorMode::RandomPalette, None),
+            (ColorMode::Single, None),
+            (ColorMode::RainbowCycle, None),
+        ] {
+            let mut sim = Simulation::new(with_colors(motion_config(), mode, stops.clone()), 9);
+            run(&mut sim, 90);
+            assert!(motion(&sim) == reference, "{mode:?} with {stops:?} moved particles");
+        }
+    }
+
+    #[test]
+    fn a_live_switch_into_random_palette_never_moves_a_particle() {
+        let mut steady = Simulation::new(with_colors(motion_config(), ColorMode::MultiPalette, rgb_stops()), 9);
+        run(&mut steady, 90);
+
+        let mut switched = Simulation::new(with_colors(motion_config(), ColorMode::MultiPalette, rgb_stops()), 9);
+        run(&mut switched, 30);
+        switched.set_config(with_colors(motion_config(), ColorMode::RandomPalette, None));
+        run(&mut switched, 30);
+        switched.set_config(with_colors(motion_config(), ColorMode::RandomPalette, rgb_stops()));
+        run(&mut switched, 30);
+
+        assert!(motion(&switched) == motion(&steady), "a colour-only set_config moved particles");
+    }
+
+    #[test]
+    fn editing_the_stops_recolours_live_random_palette_particles() {
+        let mut sim = Simulation::new(random_palette_config(rgb_stops()), 3);
+        sim.trigger_burst();
+        sim.advance(TICK);
+        let before = colors(&sim);
+
+        // Same count, new colours: each particle keeps its place in the
+        // palette and takes that stop's new colour on the next frame.
+        sim.set_config(random_palette_config(Some(vec![
+            stop(0.0, "#00ffff"),
+            stop(0.5, "#ff00ff"),
+            stop(1.0, "#ffff00"),
+        ])));
+        sim.advance(TICK);
+
+        let mapping = |c: [f32; 3]| match c {
+            [1.0, 0.0, 0.0] => [0.0, 1.0, 1.0],
+            [0.0, 1.0, 0.0] => [1.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0] => [1.0, 1.0, 0.0],
+            other => panic!("{other:?} was not a stop"),
+        };
+        assert_eq!(colors(&sim), before.into_iter().map(mapping).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn switching_into_random_palette_recolours_live_particles() {
+        let mut config = random_palette_config(None);
+        config.color_mode = ColorMode::Single;
+        let mut sim = Simulation::new(config, 3);
+        sim.trigger_burst();
+        sim.advance(TICK);
+        assert!(colors(&sim).iter().all(|c| *c == [1.0, 1.0, 1.0]));
+
+        sim.set_config(random_palette_config(rgb_stops()));
+        sim.advance(TICK);
+
+        let now = colors(&sim);
+        let stops = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        assert!(now.iter().all(|c| stops.contains(c)), "a live particle kept a stale colour: {now:?}");
+        assert!(now.windows(2).any(|w| w[0] != w[1]), "every live particle took the same stop");
     }
 
     #[test]

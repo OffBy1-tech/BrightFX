@@ -70,13 +70,15 @@ pub fn parse_config(json: &str) -> Result<ParticleFxConfig, String> {
 
     // Version first. Deserializing first would report a renamed field in
     // a future config as a confusing serde error instead of this.
+    let mut value = value;
     let version = value
         .get("schemaVersion")
         .and_then(|v| v.as_u64())
         .ok_or_else(|| "missing or non-numeric schemaVersion".to_string())?;
-    if version != SCHEMA_VERSION as u64 {
+    if !(MIN_SCHEMA_VERSION as u64..=SCHEMA_VERSION as u64).contains(&version) {
         return Err(unsupported_version_message(version));
     }
+    migrate(&mut value, version);
 
     serde_json::from_value(value).map_err(|error| format!("invalid config: {error}"))
 }
@@ -90,7 +92,7 @@ pub fn err_envelope(message: &str) -> String {
     serde_json::json!({ "ok": false, "error": message }).to_string()
 }
 
-use crate::schema::{ParticleFxConfig, SCHEMA_VERSION};
+use crate::schema::{ParticleFxConfig, MIN_SCHEMA_VERSION, SCHEMA_VERSION};
 use crate::simulation::{ParticleInstance, Simulation};
 
 /// A `Simulation` plus the boundary behavior hosts need: JSON config ingest,
@@ -361,11 +363,17 @@ impl AbiSimulation {
 /// drop the handle and build a new one.
 const POISONED_MESSAGE: &str = "simulation is poisoned by a panic; create a new one";
 
-/// No older schema versions exist yet, so every mismatch is an error. When a
-/// v2 lands, this is the single place a migration chain slots in: migrate the
-/// `serde_json::Value` forward to `SCHEMA_VERSION` and continue.
+/// Brings a supported older config forward to `SCHEMA_VERSION`, one
+/// version at a time. This is where each future step slots in.
+fn migrate(value: &mut serde_json::Value, from: u64) {
+    // 1 -> 2 only added vocabulary: the body is already valid.
+    if from < SCHEMA_VERSION as u64 {
+        value["schemaVersion"] = serde_json::json!(SCHEMA_VERSION);
+    }
+}
+
 fn unsupported_version_message(found: u64) -> String {
-    format!("unsupported schemaVersion {found} (this build supports {SCHEMA_VERSION})")
+    format!("unsupported schemaVersion {found} (this build supports {MIN_SCHEMA_VERSION}-{SCHEMA_VERSION})")
 }
 
 #[cfg(test)]
@@ -383,8 +391,8 @@ mod tests {
         let err = parse_config("{ not json").unwrap_err();
         assert!(err.starts_with("invalid JSON"), "got: {err}");
 
-        let err = parse_config(r#"{"schemaVersion": 2, "somethingEntirelyNew": true}"#).unwrap_err();
-        assert!(err.contains("unsupported schemaVersion 2"), "got: {err}");
+        let err = parse_config(r#"{"schemaVersion": 3, "somethingEntirelyNew": true}"#).unwrap_err();
+        assert!(err.contains("unsupported schemaVersion 3"), "got: {err}");
 
         let err = parse_config(r#"{"glowRadius": 1}"#).unwrap_err();
         assert_eq!(err, "missing or non-numeric schemaVersion");
@@ -517,13 +525,45 @@ mod tests {
     fn the_version_is_checked_before_the_body_is_deserialized() {
         // A future config whose body today's struct cannot parse must still
         // produce the version error, not a confusing serde error.
-        let json = r#"{"schemaVersion": 2, "somethingEntirelyNew": true}"#;
+        let json = r#"{"schemaVersion": 3, "somethingEntirelyNew": true}"#;
         let mut sim = AbiSimulation::new(42);
 
         let result = parse(&sim.set_config(json));
 
         let message = result["error"].as_str().unwrap();
         assert!(message.contains("unsupported schemaVersion"), "got: {message}");
+    }
+
+    #[test]
+    fn a_version_1_config_still_loads_and_reads_back_as_the_current_version() {
+        // v2 only added vocabulary (random-palette, capsule), so a v1 body
+        // is a valid v2 body and migrates by relabelling.
+        let mut value = serde_json::to_value(ParticleFxConfig::default()).unwrap();
+        value["schemaVersion"] = serde_json::json!(1);
+
+        let config = parse_config(&value.to_string()).unwrap();
+        assert_eq!(config.schema_version, SCHEMA_VERSION);
+
+        let mut sim = AbiSimulation::new(42);
+        assert_eq!(parse(&sim.set_config(&value.to_string()))["ok"], true);
+    }
+
+    #[test]
+    fn the_current_version_is_2_and_loads() {
+        assert_eq!(SCHEMA_VERSION, 2);
+        let json = serde_json::to_string(&ParticleFxConfig::default()).unwrap();
+        assert_eq!(parse_config(&json).unwrap().schema_version, 2);
+    }
+
+    #[test]
+    fn versions_outside_the_supported_range_are_rejected_clearly() {
+        for version in [0u64, 3] {
+            let mut value = serde_json::to_value(ParticleFxConfig::default()).unwrap();
+            value["schemaVersion"] = serde_json::json!(version);
+            let message = parse_config(&value.to_string()).unwrap_err();
+            assert!(message.contains(&format!("unsupported schemaVersion {version}")), "got: {message}");
+            assert!(message.contains("1-2"), "message must name the supported range: {message}");
+        }
     }
 
     #[test]

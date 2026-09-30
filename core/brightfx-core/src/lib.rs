@@ -4,7 +4,7 @@ pub mod render;
 pub mod schema;
 pub use schema::{
     ParticleFxConfig, EmitterConfig, EmitterTrack, ColorStop, ParticleShape, BlendMode,
-    EmissionPattern, ColorMode, SizeCurve, Category, SCHEMA_VERSION,
+    EmissionPattern, ColorMode, SizeCurve, Category, MIN_SCHEMA_VERSION, SCHEMA_VERSION,
 };
 pub mod rng;
 pub use rng::Rng;
