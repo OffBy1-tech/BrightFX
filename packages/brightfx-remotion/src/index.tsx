@@ -56,14 +56,22 @@ export interface BrightFXProps {
 }
 
 /** One simulation per mounted component. Holds Remotion's render until the
- *  wasm has initialized and the config is loaded, then releases it. */
+ *  wasm has initialized and the config is loaded, then releases it.
+ *
+ *  Returns null until a simulation built for exactly this `viewport` has
+ *  loaded. When the viewport changes (a sprite/frame mode switch, or a new
+ *  composition size), the render that sees the change still holds the old
+ *  simulation -- the effect that replaces it runs after that render -- and
+ *  drawing with it would rasterize the wrong size, or 0x0 for a sprite-mode
+ *  simulation. That render gets null instead; the replacement's
+ *  `delayRender` holds the frame until it arrives. */
 export function useBrightFX(
   effect: EffectConfig,
   seed: number,
   wasmSrc: string,
   viewport: { width: number; height: number } | null,
 ): Simulation | null {
-  const [sim, setSim] = useState<Simulation | null>(null);
+  const [loaded, setLoaded] = useState<{ sim: Simulation; width: number; height: number } | null>(null);
   const effectJson = useMemo(() => JSON.stringify(effect), [effect]);
   const viewportWidth = viewport?.width ?? 0;
   const viewportHeight = viewport?.height ?? 0;
@@ -99,7 +107,7 @@ export function useBrightFX(
           const v = created.setViewport(viewportWidth, viewportHeight, 1);
           if (!v.ok) throw new Error(`BrightFX viewport rejected: ${v.error}`);
         }
-        setSim(created);
+        setLoaded({ sim: created, width: viewportWidth, height: viewportHeight });
         release();
       })
       .catch((error: unknown) => cancelRender(error));
@@ -108,11 +116,11 @@ export function useBrightFX(
       cancelled = true;
       release();
       created?.dispose();
-      setSim(null);
+      setLoaded(null);
     };
   }, [effectJson, seed, wasmSrc, viewportWidth, viewportHeight]);
 
-  return sim;
+  return loaded && loaded.width === viewportWidth && loaded.height === viewportHeight ? loaded.sim : null;
 }
 
 export const BrightFX: React.FC<BrightFXProps> = ({

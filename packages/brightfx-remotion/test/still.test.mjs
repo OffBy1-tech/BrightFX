@@ -76,15 +76,13 @@ function referenceSim(effect = config, frame = FRAME) {
   return sim;
 }
 
-test("frame mode still equals the wrapper's frame", () => {
-  const png = still("FrameModeTest");
-  assert.equal(png.width, W);
-  assert.equal(png.height, H);
-  assert.ok(probeShown(png, "raster"), "render()/frame() never ran: the probe is not wired, so the empty-frame test proves nothing");
-  const sim = referenceSim();
+// How many pixels of `png` differ from the wrapper's own frame at `frame`,
+// compared in premultiplied space, outside the probe box.
+function differingFromReference(png, frame = FRAME) {
+  const sim = referenceSim(config, frame);
   sim.render();
   const expected = sim.frame().data;
-
+  sim.dispose();
   let differing = 0;
   let painted = 0;
   for (let i = 0; i < expected.length; i += 4) {
@@ -99,8 +97,18 @@ test("frame mode still equals the wrapper's frame", () => {
     if (off) differing++;
   }
   assert.ok(painted > 200, `reference frame is vacuous: ${painted} painted pixels`);
-  assert.ok(differing <= Math.ceil(W * H * 0.01), `${differing} pixels differ beyond tolerance`);
-  sim.dispose();
+  return differing;
+}
+
+const DIFF_BUDGET = Math.ceil(W * H * 0.01);
+
+test("frame mode still equals the wrapper's frame", () => {
+  const png = still("FrameModeTest");
+  assert.equal(png.width, W);
+  assert.equal(png.height, H);
+  assert.ok(probeShown(png, "raster"), "render()/frame() never ran: the probe is not wired, so the empty-frame test proves nothing");
+  const differing = differingFromReference(png);
+  assert.ok(differing <= DIFF_BUDGET, `${differing} pixels differ beyond tolerance`);
 });
 
 test("sprite mode still has a glyph at every visible particle", () => {
@@ -167,4 +175,17 @@ test("a canvas left from an earlier frame does not survive into an empty one", (
   frames.slice(firstEmpty).forEach((png, i) => {
     assert.equal(painted(png), 0, `frame ${from + firstEmpty + i} has no particles but shows ${painted(png)} pixels`);
   });
+});
+
+test("switching from sprite to frame mode mid-render draws the frame-mode frame", () => {
+  // Frames 25-29 are sprite mode, 30-35 frame mode, in one tab, so the
+  // switch frame starts out holding the sprite-mode simulation.
+  const from = 25;
+  const to = 35;
+  const frames = range("ModeSwitchTest", from, to);
+  frames.forEach((png, i) => assert.ok(painted(png) > 0, `frame ${from + i} drew nothing`));
+  for (let f = FRAME; f <= to; f++) {
+    const differing = differingFromReference(frames[f - from], f);
+    assert.ok(differing <= DIFF_BUDGET, `frame ${f}: ${differing} pixels differ beyond tolerance`);
+  }
 });
