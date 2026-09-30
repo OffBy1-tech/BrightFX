@@ -20,8 +20,12 @@ pub(crate) struct Particle {
     pub peak_alpha: f32,
     pub end_alpha: f32,
     /// Base color captured at spawn time (normalized 0..1 RGB), used as-is
-    /// for `ColorMode::Single` / `ColorMode::MultiPalette`.
+    /// for `ColorMode::Single` and for the palette modes without stops.
     pub color_rgb: [f32; 3],
+    /// A unit float from the colour RNG, drawn at every spawn in every
+    /// mode. `ColorMode::RandomPalette` resolves it against the current
+    /// palette each frame, so a live stop edit recolours the particle.
+    pub palette_pick: f32,
     pub hue: f32,
     pub life: f32,
     pub max_life: f32,
@@ -89,6 +93,7 @@ mod tests {
             peak_alpha: 1.0,
             end_alpha: 1.0,
             color_rgb: [1.0, 1.0, 1.0],
+            palette_pick: 0.0,
             hue: 0.0,
             life: 0.0,
             max_life: 100.0,

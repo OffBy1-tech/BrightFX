@@ -75,7 +75,7 @@ mod tests {
         let config = serde_json::to_string(&ParticleFxConfig::default()).unwrap();
         let v: serde_json::Value = serde_json::from_str(&fit_track_json(&config, 1920.0, 1080.0, 1080.0, 1920.0)).unwrap();
         assert_eq!(v["ok"], true);
-        assert_eq!(v["config"]["schemaVersion"], 1);
+        assert_eq!(v["config"]["schemaVersion"], brightfx_core::SCHEMA_VERSION);
     }
 
     fn parse(json: &str) -> serde_json::Value {
@@ -92,11 +92,11 @@ mod tests {
     #[test]
     fn fit_track_json_applies_the_core_schema_gate() {
         let mut config = serde_json::to_value(ParticleFxConfig::default()).unwrap();
-        config["schemaVersion"] = serde_json::json!(2);
+        config["schemaVersion"] = serde_json::json!(3);
         config["somethingNew"] = serde_json::json!(true);
         let v = parse(&fit_track_json(&config.to_string(), 1920.0, 1080.0, 1080.0, 1920.0));
         assert_eq!(v["ok"], false);
-        assert!(v["error"].as_str().unwrap().contains("unsupported schemaVersion 2"), "{v}");
+        assert!(v["error"].as_str().unwrap().contains("unsupported schemaVersion 3"), "{v}");
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::path::Path;
 
 fn fire_config() -> ParticleFxConfig {
     ParticleFxConfig {
-        schema_version: 1,
+        schema_version: SCHEMA_VERSION,
         id: "golden-fire".into(),
         name: "Golden Fire".into(),
         category: Category::Elemental,

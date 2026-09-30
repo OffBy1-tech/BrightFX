@@ -78,7 +78,7 @@ which config fields it deliberately ignores.
 A `.brightfx.json` effect is a single config object: emitter behavior (rate,
 burst size, emission pattern, spread, velocity inheritance), physics (gravity,
 drag, turbulence, vortex), lifetime and size curves, and color. The vocabulary
-carried today: **13 shapes**, **6 emission patterns**, **5 color modes**,
+carried today: **13 shapes**, **6 emission patterns**, **6 color modes**,
 **4 size curves**, **4 blend modes**.
 
 Configs are read permissively — out-of-range values are clamped rather than

@@ -20,7 +20,7 @@
 //! so that population includes the ones already off screen. A rain sized
 //! to reach the bottom of the 1080×1920 delivery frame spends half its
 //! life below a 1080-high one, which is why the rains' pools run to
-//! ~340-380 to keep ~110-170 in a 1920×1080 frame. `MAX_PARTICLES` is
+//! ~270-380 to keep ~115-170 in a 1920×1080 frame. `MAX_PARTICLES` is
 //! 500; `tests/presets.rs` holds every preset to 400 at steady state.
 //!
 //! The same test holds every preset to dying out of sight, in both
@@ -30,19 +30,15 @@
 //! of a 1920 px frame. A rain also takes its fall time, 2-4 s, to fill
 //! the frame from the top.
 //!
-//! One consequence of that shapes both rainbow presets and is worth
-//! stating once. `RainbowCycle` advances the hue by `rainbowSpeed * 0.5`
-//! degrees *per spawn*, so the number of full hue cycles alive at any
-//! moment is `population * rainbowSpeed * 0.5 / 360` -- at the
-//! `rainbowSpeed` ceiling of 10 that is `population / 72`, whatever the
-//! spawn rate or the lifetime. At the components' densities that is about
-//! one cycle: the spectrum is laid out exactly once across the live
-//! particles. If their positions are then a monotonic function of their
-//! age, as in a rain falling from an edge, the frame reads as one
-//! top-to-bottom colour ramp. The fix is to break the age-to-position
-//! map, not to chase the hue -- see `sprinkle_rain`.
+//! The multicolour presets deal colours with `RandomPalette`, not
+//! `RainbowCycle`. `RainbowCycle` advances the hue *per spawn*, so hue
+//! follows spawn order, and spawn order follows the emitter along its
+//! path: confetti streaked along its scatter chords, and a rain falling
+//! from an edge read as one top-to-bottom colour ramp. Dealing each
+//! particle a colour from the seeded RNG breaks that link wherever the
+//! particle lands.
 
-use brightfx_core::schema::{EmitterKeyframe, EmitterTrack, EmitterTrigger, TriggerKind};
+use brightfx_core::schema::{ColorStop, EmitterKeyframe, EmitterTrack, EmitterTrigger, TriggerKind};
 use brightfx_core::{
     BlendMode, Category, ColorMode, EmissionPattern, EmitterConfig, ParticleFxConfig, ParticleShape, SizeCurve,
     MAX_EMITTER_TRACK_DURATION, PLAYBACK_STEP,
@@ -101,6 +97,26 @@ fn scatter_sweep(y_min: f32, y_max: f32, leg: f32) -> EmitterTrack {
     }
 }
 
+/// The rainbow the two multicolour presets deal from: eight hues 45°
+/// apart at the saturation and lightness `RainbowCycle` draws with
+/// (hsl(h, 90%, 60%)), so they keep the look that mode gave them.
+const RAINBOW: [&str; 8] = ["#F53D3D", "#F5C73D", "#99F53D", "#3DF56B", "#3DF5F5", "#3D6BF5", "#993DF5", "#F53DC7"];
+
+/// `colors` as `colorStops` for `RandomPalette`, which deals them out
+/// uniformly. The offsets only fix the order they are dealt from; they are
+/// spread evenly, in the listed order, so the stops also read sensibly in
+/// an editor that shows them.
+fn palette(colors: &[&str]) -> Option<Vec<ColorStop>> {
+    let last = (colors.len().max(2) - 1) as f32;
+    Some(
+        colors
+            .iter()
+            .enumerate()
+            .map(|(i, c)| ColorStop { offset: i as f32 / last, color: (*c).into() })
+            .collect(),
+    )
+}
+
 /// `icon` is one short word a picker can show; it is per preset, so the
 /// library does not present seven identical tiles.
 fn base(id: &str, name: &str, description: &str, icon: &str, track: EmitterTrack) -> ParticleFxConfig {
@@ -130,15 +146,8 @@ fn emitter(rate: f32, burst: u32, pattern: EmissionPattern, angle: f32, spread: 
 
 /// Rainbow diamonds tumbling down the whole frame, about 200 chunky
 /// pieces of confetti. A 0.15 s scatter leg spreads each dozen along a
-/// chord of the frame.
-///
-/// `rainbowSpeed` sits at its ceiling because the hue a particle is drawn
-/// with is its spawn hue plus `progress * 120`, and that second term runs
-/// against the cycle: at 10 the palette still only sweeps ~330° over a
-/// particle's life, and anything lower leaves a visible hole in the
-/// spectrum (7.3 loses every blue and cyan). The banding the module doc
-/// warns about does not bite here: the emitter scatters over the whole
-/// frame, so a piece's height is where it was born, not how old it is.
+/// chord of the frame, and each piece is dealt one of the eight
+/// `RAINBOW` colours, so neighbours along a chord differ.
 ///
 /// Density, size, and alpha are set by how the preset reads in a real
 /// full-frame composition, not in a thumbnail: dropped into a busy,
@@ -154,11 +163,10 @@ fn emitter(rate: f32, burst: u32, pattern: EmissionPattern, angle: f32, spread: 
 /// showed, and a softer one left a visible share of the pieces
 /// semi-transparent. Pieces therefore appear in place at full strength.
 /// A longer life alone does not cure that -- a piece born mid-frame
-/// still has to appear somewhere. The cure is to spawn above the frame
-/// and fall through it, which the 5 s lifetime ceiling allows, but under
-/// `RainbowCycle` that ties hue to height and the frame becomes one
-/// colour ramp (see the module doc); it waits on a per-particle colour
-/// mode (#3).
+/// still has to appear somewhere. Spawning above the frame and falling
+/// through it would, and no longer costs a colour ramp, but crossing a
+/// 1920 px frame inside the 5 s ceiling takes ~6.5 px/step: that is a
+/// rain, not confetti drifting at 1–2.5. The drift is kept.
 pub fn confetti() -> ParticleFxConfig {
     let mut c = base(
         "confetti",
@@ -184,8 +192,8 @@ pub fn confetti() -> ParticleFxConfig {
     c.peak_size = 16.0;
     c.end_size = 16.0;
     c.size_curve = SizeCurve::Constant;
-    c.color_mode = ColorMode::RainbowCycle;
-    c.rainbow_speed = 10.0;
+    c.color_mode = ColorMode::RandomPalette;
+    c.color_stops = palette(&RAINBOW);
     c.start_alpha = 1.0;
     c.peak_alpha = 1.0;
     c.end_alpha = 0.0;
@@ -279,57 +287,40 @@ pub fn sparkles() -> ParticleFxConfig {
     c
 }
 
-/// Rainbow capsules falling from above the top edge: `SprinkleRain`, 70
-/// pieces of 8×20 px crossing the frame. The fall is faster than the
-/// component's 2.2–4.0 s, a 1080 px frame in about 1.5 s, because the
-/// rain must also clear the band below and, fitted to 1080×1920, a
-/// 1920 px frame below an 800 px band: 2740 px inside the 300-step life.
-/// Turbulence 1.2 gives each piece a fixed drift of up to ±2.3 px/step
-/// (see `frosting_rain`), so the slowest mean fall is 10.7 - 2.3 = 8.4
-/// px/step, and with the `gravityY` below that covers ~2700 px. Measured
-/// over 20 s at 9:16: none of 1380 deaths inside the frame.
+/// Rainbow capsules falling from just above the top edge: `SprinkleRain`,
+/// 70 pieces of 8×20 px crossing the frame, each dealt one of the eight
+/// `RAINBOW` colours. The emitter wanders the edge out of order (a
+/// `scatter_sweep` at one height) rather than sweeping it, so spawn
+/// order does not line up across the frame either.
 ///
-/// The emitter does not sweep the top edge. It wanders a *band* 450 px
-/// deep above it, which is what mixes the colours. Per the module doc,
-/// the hue comes round every 72 spawns, about 63 steps at this rate, so
-/// as long as a piece's height is a clean function of its age the frame
-/// is a vertical colour ramp that repeats every ~700 px of fall; the
-/// earlier left-to-right edge sweep gave exactly that (a cyan top
-/// grading to a pink bottom). Spawning anywhere in a 450 px band
-/// decouples the two: the piece at a given row may have fallen 450 px
-/// more than its neighbour, which is ~39 steps -- over 200° of hue -- so
-/// every row carries several hues at once. The wander also visits x out
-/// of order, which keeps the residual within-sweep ordering from lining
-/// up into streaks.
+/// The fall is near the component's 2.2 s: 7.5–9 px/step with `gravityY`
+/// only 0.05, so the speed stays near constant and the rain does not
+/// crowd the top (density goes as 1 / speed). Turbulence 0.8 is the
+/// sway; it also gives each piece a fixed drift of up to ±1.5 px/step
+/// (see `frosting_rain`), so the slowest mean fall is 6 px/step, which
+/// with the gravity clears a 1920 px frame inside the 300-step life.
+/// Measured over 30 s at 9:16: none of 1620 deaths inside the frame.
 ///
-/// The rest follows from that band. `gravityY` is only 0.05 so the fall
-/// stays near constant speed and the band does not pile the rain at the
-/// top.
-///
-/// The spawn rate is the one place this preset knowingly overshoots its
-/// component: at the component's 70 pieces in view the spectrum still
-/// read as a warm top over a cool bottom, and ~110 is where the rows
-/// stopped sorting by hue. 1.15 per step holds that at this fall speed,
-/// in a pool of ~344, most of it below the frame or still in the band.
-/// Turbulence is the component's sway, at about half its old 2.2 so the
-/// drift above stays inside what the life can carry.
+/// The spawn rate overshoots the component's 70: 0.9 per step keeps
+/// ~115 in a 1920×1080 frame, the density this preset has shipped with,
+/// in a pool of ~270.
 pub fn sprinkle_rain() -> ParticleFxConfig {
     let mut c = base(
         "sprinkle-rain",
         "Sprinkle Rain",
-        "Rainbow sprinkles falling fast from the top edge",
+        "Rainbow sprinkles raining down from the top edge",
         "sprinkle",
-        scatter_sweep(-450.0, -20.0, 0.1),
+        scatter_sweep(-20.0, -20.0, 0.1),
     );
-    c.emitter = emitter(1.15, 30, EmissionPattern::DirectionalCone, 90.0, 20.0);
+    c.emitter = emitter(0.9, 30, EmissionPattern::DirectionalCone, 90.0, 20.0);
     c.shape = ParticleShape::ShardCrystal;
     c.blend_mode = BlendMode::SourceOver;
     c.glow_bloom = false;
-    c.initial_speed_min = 10.7;
-    c.initial_speed_max = 12.5;
+    c.initial_speed_min = 7.5;
+    c.initial_speed_max = 9.0;
     c.gravity_y = 0.05;
     c.drag = 1.0;
-    c.turbulence = 1.2;
+    c.turbulence = 0.8;
     c.rotation_speed_min = 0.04;
     c.rotation_speed_max = 0.1;
     c.lifetime_min = 300.0;
@@ -338,8 +329,8 @@ pub fn sprinkle_rain() -> ParticleFxConfig {
     c.peak_size = 8.0;
     c.end_size = 8.0;
     c.size_curve = SizeCurve::Constant;
-    c.color_mode = ColorMode::RainbowCycle;
-    c.rainbow_speed = 10.0;
+    c.color_mode = ColorMode::RandomPalette;
+    c.color_stops = palette(&RAINBOW);
     c.start_alpha = 0.95;
     c.peak_alpha = 0.95;
     c.end_alpha = 0.95;
@@ -367,11 +358,11 @@ pub fn sprinkle_rain() -> ParticleFxConfig {
 /// Measured over 30 s at 9:16: none of 2434 deaths inside the frame.
 /// 1.35 per step holds ~170 in a 1920×1080 frame, in a pool of ~376.
 ///
-/// The component's palette is six colours (two pinks, white, yellow,
-/// purple, green); this keeps the pink-and-white majority and drops the
-/// rest, because a full spectrum here would be `sprinkle-rain` again. The
-/// gradient runs pink → white → pink rather than ending on white, so the
-/// fall does not read as one long fade.
+/// The palette is the component's six colours -- two pinks, white, and
+/// yellow, purple, and mint accents -- dealt one per drop. Soft accents
+/// rather than `sprinkle-rain`'s full-strength spectrum are what keep
+/// the two rains apart. The earlier pink → white → pink lifetime
+/// gradient dropped the accents and read as mostly white (#6).
 pub fn frosting_rain() -> ParticleFxConfig {
     let mut c = base(
         "frosting-rain",
@@ -395,10 +386,9 @@ pub fn frosting_rain() -> ParticleFxConfig {
     c.peak_size = 11.0;
     c.end_size = 10.0;
     c.size_curve = SizeCurve::GrowShrink;
-    c.color_mode = ColorMode::GradientLifetime;
+    c.color_mode = ColorMode::RandomPalette;
+    c.color_stops = palette(&["#FF5D8F", "#FF8FC8", "#FFFFFF", "#FFE066", "#B98CFF", "#8FE3B0"]);
     c.primary_color = "#FF5D8F".into();
-    c.secondary_color = "#FFFFFF".into();
-    c.accent_color = "#FF8FC8".into();
     c.start_alpha = 0.95;
     c.peak_alpha = 0.95;
     c.end_alpha = 0.95;
