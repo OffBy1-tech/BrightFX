@@ -50,8 +50,16 @@ export interface EmitterTrack {
   triggers: EmitterTrigger[];
 }
 
+/** Which way particles turn; `rotationSpeedMin`/`Max` is the magnitude. */
+export type SpinDirection = "fixed" | "random";
+
 /** A `.brightfx.json` config. Typed loosely: the core validates it. */
-export type EffectConfig = { schemaVersion: number; emitterTrack?: EmitterTrack | null } & Record<string, unknown>;
+export type EffectConfig = {
+  schemaVersion: number;
+  emitterTrack?: EmitterTrack | null;
+  /** Schema version 3+. Omitted means `"fixed"`. */
+  spinDirection?: SpinDirection;
+} & Record<string, unknown>;
 
 export interface Cue {
   t: [number, number];

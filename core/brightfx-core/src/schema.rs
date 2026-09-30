@@ -2,9 +2,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// The config schema version this build writes. Version 2 added the
-/// `random-palette` colour mode and the `capsule` shape; nothing was
-/// renamed or removed, so a version 1 config is a valid version 2 body.
-pub const SCHEMA_VERSION: u32 = 2;
+/// `random-palette` colour mode; version 3 the `capsule` shape and
+/// `spinDirection`. Nothing was renamed or removed, so an older config is
+/// a valid current body once relabelled (`spinDirection` defaults).
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// The oldest config schema version this build still reads. `AbiSimulation`
 /// accepts `MIN_SCHEMA_VERSION..=SCHEMA_VERSION`, migrates an older config
@@ -65,6 +66,21 @@ pub enum ColorMode {
     /// it for life. Offsets do not weight the pick; they set the order the
     /// stops are dealt from, which is what a live stop edit follows.
     RandomPalette,
+}
+
+/// Which way particles turn. `rotationSpeedMin..Max` is always the
+/// magnitude; this decides the sign.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SpinDirection {
+    /// Every particle turns the way the range's sign says (clockwise for
+    /// a positive range), as before this field existed.
+    #[default]
+    Fixed,
+    /// Each particle's sign is a coin flip at spawn. The flip draws from
+    /// the motion RNG, so switching a config between the two re-lays out
+    /// the whole effect, as changing any motion field does.
+    Random,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -181,6 +197,10 @@ pub struct ParticleFxConfig {
     pub vortex_attraction: f32,
     pub rotation_speed_min: f32,
     pub rotation_speed_max: f32,
+    /// Optional; configs written before schema version 3 omit it and get
+    /// `fixed`.
+    #[serde(default)]
+    pub spin_direction: SpinDirection,
 
     pub lifetime_min: f32,
     pub lifetime_max: f32,
@@ -321,6 +341,7 @@ impl Default for ParticleFxConfig {
             vortex_attraction: 0.0,
             rotation_speed_min: 0.0,
             rotation_speed_max: 1.0,
+            spin_direction: SpinDirection::Fixed,
             lifetime_min: 30.0,
             lifetime_max: 60.0,
             start_size: 4.0,
@@ -406,6 +427,7 @@ mod tests {
             vortex_attraction: 0.0,
             rotation_speed_min: 0.0,
             rotation_speed_max: 2.0,
+            spin_direction: SpinDirection::Fixed,
             lifetime_min: 30.0,
             lifetime_max: 60.0,
             start_size: 4.0,

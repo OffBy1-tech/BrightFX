@@ -2,7 +2,7 @@ use crate::color::{hex_to_rgb, hsl_to_rgb, interpolate_hex, palette_index, sampl
 use crate::particle::{Particle, ParticlePool, MAX_PARTICLES};
 use crate::rng::Rng;
 use crate::schema::{
-    ColorMode, EmissionPattern, EmitterKeyframe, ParticleFxConfig, TriggerKind,
+    ColorMode, SpinDirection, EmissionPattern, EmitterKeyframe, ParticleFxConfig, TriggerKind,
     MAX_EMITTER_TRACK_DURATION,
 };
 use std::sync::Arc;
@@ -516,6 +516,13 @@ impl Simulation {
         let rotation_speed = self
             .rng
             .range(self.config.rotation_speed_min, self.config.rotation_speed_max);
+        // Drawn only in random mode, so a fixed-spin config keeps the
+        // motion sequence it has always had.
+        let rotation_speed = if self.config.spin_direction == SpinDirection::Random && self.rng.f32() < 0.5 {
+            -rotation_speed
+        } else {
+            rotation_speed
+        };
 
         let particle = Particle {
             x: self.emitter_x + (self.rng.f32() - 0.5) * 4.0,
@@ -731,6 +738,7 @@ mod tests {
             vortex_attraction: 0.0,
             rotation_speed_min: 0.0,
             rotation_speed_max: 0.0,
+            spin_direction: SpinDirection::Fixed,
             lifetime_min: 100.0,
             lifetime_max: 100.0,
             start_size: 10.0,
@@ -1264,6 +1272,63 @@ mod tests {
         let stops = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
         assert!(now.iter().all(|c| stops.contains(c)), "a live particle kept a stale colour: {now:?}");
         assert!(now.windows(2).any(|w| w[0] != w[1]), "every live particle took the same stop");
+    }
+
+    fn spin_config(direction: SpinDirection) -> ParticleFxConfig {
+        let mut config = base_config();
+        config.emitter.spawn_burst_size = 40;
+        config.lifetime_min = 100.0;
+        config.lifetime_max = 100.0;
+        config.rotation_speed_min = 0.04;
+        config.rotation_speed_max = 0.1;
+        config.spin_direction = direction;
+        config
+    }
+
+    /// Each live particle's rotation speed, read off two frames.
+    fn spins(sim: &mut Simulation) -> Vec<f32> {
+        let before: Vec<f32> = sim.buffer().iter().map(|p| p.rotation).collect();
+        sim.advance(TICK);
+        sim.buffer().iter().zip(before).map(|(p, r)| p.rotation - r).collect()
+    }
+
+    #[test]
+    fn fixed_spin_is_the_default_and_turns_every_particle_the_same_way() {
+        assert_eq!(ParticleFxConfig::default().spin_direction, SpinDirection::Fixed);
+        let mut sim = Simulation::new(spin_config(SpinDirection::Fixed), 4);
+        sim.trigger_burst();
+        sim.advance(TICK);
+        let spins = spins(&mut sim);
+        assert!(spins.iter().all(|s| (0.04 - 1e-4..=0.1 + 1e-4).contains(s)), "{spins:?}");
+    }
+
+    #[test]
+    fn random_spin_turns_particles_both_ways_at_the_same_speeds() {
+        let mut sim = Simulation::new(spin_config(SpinDirection::Random), 4);
+        sim.trigger_burst();
+        sim.advance(TICK);
+        let spins = spins(&mut sim);
+        assert_eq!(spins.len(), 40);
+        assert!(spins.iter().all(|s| (0.04 - 1e-4..=0.1 + 1e-4).contains(&s.abs())), "{spins:?}");
+        assert!(spins.iter().any(|s| *s > 0.0), "no particle spun clockwise");
+        assert!(spins.iter().any(|s| *s < 0.0), "no particle spun counter-clockwise");
+    }
+
+    #[test]
+    fn random_spin_is_deterministic_under_seek() {
+        let mut config = spin_config(SpinDirection::Random);
+        config.emitter.spawn_burst_size = 30;
+        config.emitter_track = track_config().emitter_track;
+
+        let mut fresh = Simulation::new(config.clone(), 5);
+        fresh.seek(0.9);
+        let mut rewound = Simulation::new(config, 5);
+        rewound.seek(0.95);
+        rewound.seek(0.6);
+        rewound.seek(0.9);
+
+        assert_eq!(fresh.particle_count(), 30, "test is vacuous without the burst");
+        assert_eq!(fresh.buffer().to_vec(), rewound.buffer().to_vec());
     }
 
     #[test]

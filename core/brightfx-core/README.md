@@ -130,6 +130,17 @@ and diff the directories: a speedup that should not change pixels can be
 held to bit-identical output, and one that legitimately does can be
 measured rather than eyeballed.
 
+## Spin direction
+
+`rotationSpeedMin`/`rotationSpeedMax` set how fast a particle turns.
+`spinDirection` (schema version 3; omitted means `"fixed"`) sets which
+way. `"fixed"` turns every particle the way the range's sign says.
+`"random"` flips each particle's sign at spawn, so pieces tumble both ways
+at speeds from the same range. The flip is a motion draw: toggling the
+field re-lays out the whole effect, as changing any motion field does,
+while `"fixed"` configs keep exactly the random sequence they had before
+the field existed.
+
 ## Color modes
 
 `ColorMode::MultiPalette` samples `color_stops` across each particle's

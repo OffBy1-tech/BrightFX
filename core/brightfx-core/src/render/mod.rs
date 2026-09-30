@@ -735,28 +735,28 @@ mod tests {
         assert_eq!(pixel(&turned, 41, 10, 20)[3], 255, "turned diamond is wide");
     }
 
-    /// Painted rows and columns (alpha over half) of a frame: (width, height).
-    fn painted_extent(f: &[u8], w: u32) -> (u32, u32) {
-        let (mut x0, mut x1, mut y0, mut y1) = (w, 0, w, 0);
-        for y in 0..w {
+    /// The bounding box of a `w` x `h` frame's painted pixels (alpha over
+    /// half), as (width, height). Panics on a frame with nothing painted.
+    fn painted_extent(f: &[u8], w: u32, h: u32) -> (u32, u32) {
+        let mut bounds: Option<(u32, u32, u32, u32)> = None;
+        for y in 0..h {
             for x in 0..w {
                 if pixel(f, w, x, y)[3] > 127 {
-                    x0 = x0.min(x);
-                    x1 = x1.max(x);
-                    y0 = y0.min(y);
-                    y1 = y1.max(y);
+                    let (x0, x1, y0, y1) = bounds.unwrap_or((x, x, y, y));
+                    bounds = Some((x0.min(x), x1.max(x), y0.min(y), y1.max(y)));
                 }
             }
         }
+        let (x0, x1, y0, y1) = bounds.expect("nothing painted above half alpha");
         (x1 + 1 - x0, y1 + 1 - y0)
     }
 
     #[test]
-    fn a_capsule_is_twice_its_size_long_and_a_2_3rd_of_that_wide() {
+    fn a_capsule_is_twice_its_size_long_with_a_2_3_to_1_aspect() {
         // size is the half-length, as for the diamond: size 20 is a 40 px
         // capsule, 40 / 2.3 = 17.4 px across.
         let f = render(ParticleShape::Capsule, BlendMode::SourceOver, &[particle(40.5, 40.5, 20.0, 0.0, RED)], 81, 81, 1.0);
-        let (w, h) = painted_extent(&f, 81);
+        let (w, h) = painted_extent(&f, 81, 81);
         assert!((39..=41).contains(&h), "capsule is {h} px long");
         assert!((16..=19).contains(&w), "capsule is {w} px wide");
     }
@@ -787,9 +787,16 @@ mod tests {
             81,
             1.0,
         );
-        let (w, h) = painted_extent(&turned, 81);
+        let (w, h) = painted_extent(&turned, 81, 81);
         assert!((39..=41).contains(&w), "turned capsule is {w} px long");
         assert!((16..=19).contains(&h), "turned capsule is {h} px tall");
+    }
+
+    #[test]
+    fn a_tiny_capsule_still_paints_its_half_pixel_floor_like_the_circle() {
+        let f = render(ParticleShape::Capsule, BlendMode::SourceOver, &[particle(20.5, 20.5, 0.01, 0.0, RED)], 40, 40, 1.0);
+        assert!(pixel(&f, 40, 20, 20)[3] > 60, "min_size 0.5 gives a visible dot, got {:?}", pixel(&f, 40, 20, 20));
+        assert_eq!(shapes::shape_for(ParticleShape::Capsule).min_size, shapes::shape_for(ParticleShape::Circle).min_size);
     }
 
     #[test]

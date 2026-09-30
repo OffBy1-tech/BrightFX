@@ -36,6 +36,7 @@ fn fire_config() -> ParticleFxConfig {
         vortex_attraction: 0.0,
         rotation_speed_min: -1.0,
         rotation_speed_max: 1.0,
+        spin_direction: SpinDirection::Fixed,
         lifetime_min: 40.0,
         lifetime_max: 80.0,
         start_size: 6.0,
