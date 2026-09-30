@@ -19,6 +19,7 @@
 use brightfx_core::abi::AbiSimulation;
 use brightfx_core::{ParticleFxConfig, Simulation, MAX_EMITTER_TRACK_DURATION, PLAYBACK_STEP};
 use brightfx_tracks::fit_track;
+use brightfx_test_support::{fixtures_dir, regenerating};
 use brightfx_tracks::presets::{library, render_json, FRAME_H, FRAME_W};
 use std::path::PathBuf;
 
@@ -60,7 +61,7 @@ fn presets_dir() -> PathBuf {
 }
 
 fn golden_dir() -> PathBuf {
-    repo_root().join("core/fixtures/presets")
+    fixtures_dir().join("presets")
 }
 
 #[test]
@@ -190,7 +191,7 @@ fn render_golden(config: &brightfx_core::ParticleFxConfig) -> Vec<u8> {
 #[test]
 fn golden_frames_match() {
     std::fs::create_dir_all(golden_dir()).unwrap();
-    let regenerate = std::env::var("BRIGHTFX_REGENERATE").as_deref() == Ok("1");
+    let regenerate = regenerating();
     for (name, config) in library() {
         let frame = render_golden(&config);
         let path = golden_dir().join(format!("{name}.rgba"));

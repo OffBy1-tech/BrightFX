@@ -6,6 +6,7 @@ version = 4
 name = "brightfx-core"
 version = "0.1.0"
 dependencies = [
+ "brightfx-test-support",
  "schemars",
  "serde",
  "serde_json",
@@ -20,10 +21,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "brightfx-test-support"
+version = "0.1.0"
+
+[[package]]
 name = "brightfx-tracks"
 version = "0.1.0"
 dependencies = [
  "brightfx-core",
+ "brightfx-test-support",
  "serde",
  "serde_json",
 ]

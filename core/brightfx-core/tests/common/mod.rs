@@ -5,7 +5,7 @@
 //! same deliberately rather than hide under a module-wide allow.
 
 use brightfx_core::ParticleInstance;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Tolerance for comparing simulation output produced by different builds
 /// of the same code: `golden.rs` compares this machine's libm against the
@@ -23,30 +23,10 @@ pub const LIBM_DRIFT_TOLERANCE: f32 = 2e-3;
 #[allow(dead_code)]
 pub mod seek;
 
-/// `core/fixtures`, where the cross-target fixtures live.
-#[allow(dead_code)]
-pub fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fixtures")
-}
-
-/// Whether this run rewrites fixtures instead of verifying them. Only the
-/// exact value `1` counts, so an inherited `BRIGHTFX_REGENERATE=0` or an
-/// empty value cannot quietly turn a verify run into a re-baseline.
-#[allow(dead_code)]
-pub fn regenerating() -> bool {
-    let value = match std::env::var("BRIGHTFX_REGENERATE") {
-        Ok(value) if value == "1" => return true,
-        Ok(value) => format!("{value:?}"),
-        Err(std::env::VarError::NotUnicode(value)) => format!("{value:?} (not UTF-8)"),
-        Err(std::env::VarError::NotPresent) => return false,
-    };
-    // Once per test binary: several fixtures may ask.
-    static WARNED: std::sync::Once = std::sync::Once::new();
-    WARNED.call_once(|| {
-        eprintln!("BRIGHTFX_REGENERATE={value} is ignored and the fixtures are verified; only =1 regenerates")
-    });
-    false
-}
+/// From `brightfx-test-support`, so every crate's suites agree on where
+/// the fixtures are and on what counts as a regenerate run.
+#[allow(unused_imports)]
+pub use brightfx_test_support::{fixtures_dir, regenerating};
 
 /// The recorded expectation at `path`, or `None` after rewriting it from
 /// `record` when `regenerating()` -- the caller then has nothing to verify.

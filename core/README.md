@@ -11,6 +11,7 @@ boundary. Hosts blit the frame this produces.
 | `brightfx-tracks` | Emitter-track generators (`fit_track`, `sweep_track`, the lyric-cue generator): timing data in, baked tracks out, no rendering |
 | `brightfx-ffi` | C ABI wrapper (staticlib + cdylib) for the macOS and Windows apps |
 | `brightfx-wasm` | wasm-bindgen wrapper for the web app; also exports the `brightfx-tracks` generators |
+| `brightfx-test-support` | Dev-only: the fixture helpers (`fixtures_dir`, `regenerating`) every crate's tests share; not published |
 
 See `brightfx-core/README.md` for the simulation and render crate itself —
 its schema, its units, and its known gaps (`sound_on_spawn` is the one
@@ -149,6 +150,9 @@ BRIGHTFX_REGENERATE=1 cargo test -p brightfx-tracks --test cues_fixture
 ```
 
 Only the exact value `1` regenerates; any other value, or none, verifies.
+Every suite asks `brightfx-test-support`'s `regenerating()`, so that rule
+holds workspace-wide; a new fixture test should use it rather than read
+the variable itself.
 
 After changing any `extern "C"` signature, regenerate the header:
 
