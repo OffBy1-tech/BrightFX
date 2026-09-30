@@ -8,11 +8,7 @@
 //! expected file after an intentional change.
 
 use brightfx_tracks::json::generate_cue_tracks_json;
-use std::path::PathBuf;
-
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fixtures")
-}
+use brightfx_test_support::{fixtures_dir, regenerating};
 
 fn generate() -> String {
     let input = std::fs::read_to_string(fixtures_dir().join("tracks-cues.input.json")).unwrap();
@@ -25,7 +21,7 @@ fn generate() -> String {
 fn the_fixture_matches_the_recorded_expectation() {
     let actual = generate();
     let path = fixtures_dir().join("tracks-cues.expected.json");
-    if std::env::var("BRIGHTFX_REGENERATE").as_deref() == Ok("1") {
+    if regenerating() {
         std::fs::write(&path, &actual).unwrap();
         eprintln!("regenerated {}", path.display());
         return;

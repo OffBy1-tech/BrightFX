@@ -14,3 +14,4 @@ serde_json = "1"
 # The golden-frame test in tests/presets.rs rasterizes each preset, which
 # needs the core's optional software renderer.
 brightfx-core = { path = "../brightfx-core", features = ["render"] }
+brightfx-test-support = { path = "../brightfx-test-support" }

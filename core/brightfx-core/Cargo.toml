@@ -16,3 +16,6 @@ render = []
 [[example]]
 name = "render_bench"
 required-features = ["render"]
+
+[dev-dependencies]
+brightfx-test-support = { path = "../brightfx-test-support" }
