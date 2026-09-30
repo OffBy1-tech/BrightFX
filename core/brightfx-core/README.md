@@ -132,11 +132,15 @@ measured rather than eyeballed.
 
 ## Spin direction
 
-`rotationSpeedMin`/`rotationSpeedMax` set how fast a particle turns.
-`spinDirection` (schema version 3; omitted means `"fixed"`) sets which
-way. `"fixed"` turns every particle the way the range's sign says.
-`"random"` flips each particle's sign at spawn, so pieces tumble both ways
-at speeds from the same range. The flip is a motion draw: toggling the
+Each particle draws a signed rotation speed `v` uniformly from
+`rotationSpeedMin..rotationSpeedMax`. `spinDirection` (schema version 3;
+omitted means `"fixed"`) decides its sign. `"fixed"` turns at `v` as
+drawn, so the range's sign sets the direction: a positive range turns
+every particle clockwise, and a range spanning zero gives both. `"random"`
+turns at `v` or `-v` by a coin flip at spawn, so speeds are symmetric
+about zero: a positive range tumbles pieces both ways at magnitudes from
+it, and a range spanning zero gives speeds up to the larger of `|min|`
+and `|max|` either way. The flip is a motion draw: toggling the
 field re-lays out the whole effect, as changing any motion field does,
 while `"fixed"` configs keep exactly the random sequence they had before
 the field existed.

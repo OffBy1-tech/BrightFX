@@ -33,24 +33,6 @@ pub(crate) struct Shape {
     pub symmetric: bool,
 }
 
-#[cfg(test)]
-pub(crate) const ALL: [ParticleShape; 14] = [
-    ParticleShape::Circle,
-    ParticleShape::SparkleStar,
-    ParticleShape::GlowDisc,
-    ParticleShape::Ring,
-    ParticleShape::ShardCrystal,
-    ParticleShape::PlasmaOrb,
-    ParticleShape::SmokePuff,
-    ParticleShape::LightningBolt,
-    ParticleShape::Bubble,
-    ParticleShape::Heart,
-    ParticleShape::SakuraPetal,
-    ParticleShape::Diamond,
-    ParticleShape::Rune,
-    ParticleShape::Capsule,
-];
-
 const fn fill(geometry: Geometry, paint: Paint) -> Layer {
     Layer { geometry, op: Op::Fill, paint }
 }
@@ -255,8 +237,10 @@ const CAPSULE_K: f32 = KAPPA * CAPSULE_R;
 
 static CAPSULE: Shape = Shape {
     extent: 1.0,
-    // The circle's floor, so a tiny capsule still reads as a dot.
-    min_size: 0.5,
+    // `s` is a half-length, so matching the circle's 0.5 px radius floor
+    // takes a larger one: at 0.6 a floored capsule covers the same area as
+    // a floored circle (render test `a_tiny_capsule_...`).
+    min_size: 0.6,
     symmetric: false,
     layers: &[fill(
         Geometry::Path(&[
@@ -299,14 +283,14 @@ mod tests {
 
     #[test]
     fn every_shape_has_at_least_one_layer() {
-        for shape in ALL {
+        for shape in ParticleShape::ALL {
             assert!(!shape_for(shape).layers.is_empty(), "{shape:?} has no layers");
         }
     }
 
     #[test]
     fn every_layer_fits_inside_its_shape_extent_including_stroke_width() {
-        for shape in ALL {
+        for shape in ParticleShape::ALL {
             let def = shape_for(shape);
             for (i, layer) in def.layers.iter().enumerate() {
                 let half = match layer.op {
@@ -329,7 +313,7 @@ mod tests {
 
     #[test]
     fn radial_layers_declare_the_radius_their_geometry_uses() {
-        for shape in ALL {
+        for shape in ParticleShape::ALL {
             for layer in shape_for(shape).layers {
                 if let Paint::Radial { radius, .. } = layer.paint {
                     match layer.geometry {
@@ -358,7 +342,7 @@ mod tests {
 
     #[test]
     fn every_radial_gradient_has_at_least_two_stops() {
-        for shape in ALL {
+        for shape in ParticleShape::ALL {
             for layer in shape_for(shape).layers {
                 if let Paint::Radial { stops, .. } = layer.paint {
                     assert!(stops.len() >= 2, "{shape:?} has a radial paint with {} stops", stops.len());

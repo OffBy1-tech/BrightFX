@@ -1329,6 +1329,10 @@ mod tests {
 
         assert_eq!(fresh.particle_count(), 30, "test is vacuous without the burst");
         assert_eq!(fresh.buffer().to_vec(), rewound.buffer().to_vec());
+        // And the replay really is of a random spin, not a fixed one.
+        let spins = spins(&mut fresh);
+        assert!(spins.iter().any(|s| *s < 0.0), "no particle spun backwards, so the flip never happened");
+        assert!(spins.iter().any(|s| *s > 0.0), "no particle spun forwards");
     }
 
     #[test]

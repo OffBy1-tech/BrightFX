@@ -10,23 +10,6 @@ use brightfx_core::render::Renderer;
 use brightfx_core::{BlendMode, ParticleFxConfig, ParticleInstance, ParticleShape};
 use std::path::Path;
 
-const SHAPES: [ParticleShape; 14] = [
-    ParticleShape::Circle,
-    ParticleShape::SparkleStar,
-    ParticleShape::GlowDisc,
-    ParticleShape::Ring,
-    ParticleShape::ShardCrystal,
-    ParticleShape::PlasmaOrb,
-    ParticleShape::SmokePuff,
-    ParticleShape::LightningBolt,
-    ParticleShape::Bubble,
-    ParticleShape::Heart,
-    ParticleShape::SakuraPetal,
-    ParticleShape::Diamond,
-    ParticleShape::Rune,
-    ParticleShape::Capsule,
-];
-
 fn write(dir: &Path, name: &str, frame: &[u8]) {
     std::fs::write(dir.join(format!("{name}.rgba")), frame).unwrap();
 }
@@ -74,7 +57,7 @@ fn main() {
             }
         })
         .collect();
-    for shape in SHAPES {
+    for shape in ParticleShape::ALL {
         for (mode_name, mode) in [
             ("over", BlendMode::SourceOver),
             ("lighter", BlendMode::Lighter),

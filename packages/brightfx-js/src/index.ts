@@ -50,7 +50,13 @@ export interface EmitterTrack {
   triggers: EmitterTrigger[];
 }
 
-/** Which way particles turn; `rotationSpeedMin`/`Max` is the magnitude. */
+/**
+ * Which way particles turn. Each particle draws a signed speed `v` from
+ * `rotationSpeedMin..rotationSpeedMax`. `"fixed"` turns at `v` as drawn, so
+ * the range's sign sets the direction (a range spanning zero gives both).
+ * `"random"` turns at `v` or `-v` by a coin flip at spawn, so speeds are
+ * symmetric about zero.
+ */
 export type SpinDirection = "fixed" | "random";
 
 /** A `.brightfx.json` config. Typed loosely: the core validates it. */

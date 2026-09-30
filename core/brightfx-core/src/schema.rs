@@ -34,6 +34,27 @@ pub enum ParticleShape {
     Capsule,
 }
 
+impl ParticleShape {
+    /// Every shape, in declaration order. For hosts and tools that list or
+    /// render them all; `every_shape_is_in_all_once` keeps it complete.
+    pub const ALL: [ParticleShape; 14] = [
+        ParticleShape::Circle,
+        ParticleShape::SparkleStar,
+        ParticleShape::GlowDisc,
+        ParticleShape::Ring,
+        ParticleShape::ShardCrystal,
+        ParticleShape::PlasmaOrb,
+        ParticleShape::SmokePuff,
+        ParticleShape::LightningBolt,
+        ParticleShape::Bubble,
+        ParticleShape::Heart,
+        ParticleShape::SakuraPetal,
+        ParticleShape::Diamond,
+        ParticleShape::Rune,
+        ParticleShape::Capsule,
+    ];
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum BlendMode {
@@ -68,16 +89,21 @@ pub enum ColorMode {
     RandomPalette,
 }
 
-/// Which way particles turn. `rotationSpeedMin..Max` is always the
-/// magnitude; this decides the sign.
+/// Which way particles turn. Each particle draws a signed rotation speed
+/// `v` uniformly from `rotationSpeedMin..rotationSpeedMax`; this decides
+/// what happens to its sign.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum SpinDirection {
-    /// Every particle turns the way the range's sign says (clockwise for
-    /// a positive range), as before this field existed.
+    /// The particle turns at `v` as drawn: the range's sign sets the
+    /// direction (a positive range turns clockwise, a range spanning zero
+    /// gives both), as before this field existed.
     #[default]
     Fixed,
-    /// Each particle's sign is a coin flip at spawn. The flip draws from
+    /// The particle turns at `v` or `-v`, a coin flip at spawn, so speeds
+    /// are symmetric about zero: a positive range gives magnitudes from it
+    /// in both directions, and a range spanning zero gives speeds up to
+    /// the larger of `|min|` and `|max|` either way. The flip draws from
     /// the motion RNG, so switching a config between the two re-lays out
     /// the whole effect, as changing any motion field does.
     Random,
@@ -365,6 +391,32 @@ impl Default for ParticleFxConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_shape_is_in_all_once() {
+        // The match is exhaustive, so a new variant fails to compile here
+        // until it is given an index, and the assert then fails until it
+        // is in ALL at that index.
+        for (i, shape) in ParticleShape::ALL.iter().enumerate() {
+            let index = match shape {
+                ParticleShape::Circle => 0,
+                ParticleShape::SparkleStar => 1,
+                ParticleShape::GlowDisc => 2,
+                ParticleShape::Ring => 3,
+                ParticleShape::ShardCrystal => 4,
+                ParticleShape::PlasmaOrb => 5,
+                ParticleShape::SmokePuff => 6,
+                ParticleShape::LightningBolt => 7,
+                ParticleShape::Bubble => 8,
+                ParticleShape::Heart => 9,
+                ParticleShape::SakuraPetal => 10,
+                ParticleShape::Diamond => 11,
+                ParticleShape::Rune => 12,
+                ParticleShape::Capsule => 13,
+            };
+            assert_eq!(index, i, "{shape:?} is out of place in ParticleShape::ALL");
+        }
+    }
 
     #[test]
     fn particle_shape_serializes_kebab_case() {

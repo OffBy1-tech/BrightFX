@@ -306,7 +306,8 @@ pub fn sparkles() -> ParticleFxConfig {
 /// sway; it also gives each piece a fixed drift of up to ±1.5 px/step
 /// (see `frosting_rain`), so the slowest mean fall is 6 px/step, which
 /// with the gravity clears a 1920 px frame inside the 300-step life.
-/// Measured over 30 s at 9:16: none of 1620 deaths inside the frame.
+/// Measured over 30 s on these capsules with random spin: none of 1620
+/// deaths inside the frame, at 16:9 or 9:16.
 ///
 /// The spawn rate overshoots the component's 70: 0.9 per step keeps
 /// ~115 in a 1920×1080 frame, the density this preset has shipped with,

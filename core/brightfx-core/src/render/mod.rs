@@ -679,7 +679,7 @@ mod tests {
     fn every_shape_draws_something_and_stays_inside_its_extent_at_every_size_with_and_without_glow() {
         const W: u32 = 220;
         const CENTER: f32 = 110.0;
-        for shape in shapes::ALL {
+        for shape in ParticleShape::ALL {
             let extent = shapes::shape_for(shape).extent;
             for &size in &[2.0f32, 8.0, 30.0] {
                 for glow_on in [false, true] {
@@ -793,10 +793,17 @@ mod tests {
     }
 
     #[test]
-    fn a_tiny_capsule_still_paints_its_half_pixel_floor_like_the_circle() {
-        let f = render(ParticleShape::Capsule, BlendMode::SourceOver, &[particle(20.5, 20.5, 0.01, 0.0, RED)], 40, 40, 1.0);
-        assert!(pixel(&f, 40, 20, 20)[3] > 60, "min_size 0.5 gives a visible dot, got {:?}", pixel(&f, 40, 20, 20));
-        assert_eq!(shapes::shape_for(ParticleShape::Capsule).min_size, shapes::shape_for(ParticleShape::Circle).min_size);
+    fn a_tiny_capsule_still_paints_a_dot_as_strong_as_the_circles_floor() {
+        // The capsule's size is a half-length, so its floor has to be larger
+        // than the circle's radius floor to cover as much.
+        let total = |f: &[u8]| f.chunks(4).map(|px| px[3] as u32).sum::<u32>();
+        let circle = render(ParticleShape::Circle, BlendMode::SourceOver, &[particle(20.5, 20.5, 0.01, 0.0, RED)], 40, 40, 1.0);
+        for rotation in [0.0, std::f32::consts::FRAC_PI_4] {
+            let f = render(ParticleShape::Capsule, BlendMode::SourceOver, &[particle(20.5, 20.5, 0.01, rotation, RED)], 40, 40, 1.0);
+            assert!(pixel(&f, 40, 20, 20)[3] > 100, "rotation {rotation}: min_size gives a visible dot, got {:?}", pixel(&f, 40, 20, 20));
+            let ratio = total(&f) as f32 / total(&circle) as f32;
+            assert!((0.9..=1.1).contains(&ratio), "rotation {rotation}: covers {ratio} of the circle's floor");
+        }
     }
 
     #[test]
