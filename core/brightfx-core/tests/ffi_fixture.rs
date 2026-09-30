@@ -8,8 +8,7 @@
 mod common;
 
 use brightfx_core::abi::AbiSimulation;
-use common::LIBM_DRIFT_TOLERANCE;
-use std::path::PathBuf;
+use common::{assert_within_libm_drift, fixtures_dir, floats, load_or_regenerate, LIBM_DRIFT_TOLERANCE};
 
 const SEED: u64 = 42;
 const FRAMES: usize = 120;
@@ -17,10 +16,6 @@ const FRAMES: usize = 120;
 /// ulp and turn a rounding artifact into a false marshaling failure.
 const DT: f32 = 0.015625;
 const BURST_FRAME: usize = 60;
-
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fixtures")
-}
 
 /// The emitter's state on every frame: `x, y, vx, vy`. Recorded in the
 /// fixture so the harnesses replay these numbers rather than re-derive them.
@@ -77,10 +72,8 @@ fn run_protocol() -> (u32, Vec<f32>) {
 #[test]
 fn the_fixture_matches_the_recorded_expectation() {
     let (count, buffer) = run_protocol();
-    let path = fixtures_dir().join("ffi-smoke.expected.json");
-
-    if std::env::var("BRIGHTFX_REGENERATE").is_ok() {
-        let json = serde_json::json!({
+    let record = || {
+        serde_json::json!({
             "seed": SEED,
             "frames": FRAMES,
             "dt": DT,
@@ -90,17 +83,9 @@ fn the_fixture_matches_the_recorded_expectation() {
             "tolerance": LIBM_DRIFT_TOLERANCE,
             "particleCount": count,
             "buffer": buffer,
-        });
-        std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap()).unwrap();
-        eprintln!("regenerated {}", path.display());
-        return;
-    }
-
-    let expected: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).expect(
-            "expected fixture missing -- run with BRIGHTFX_REGENERATE=1 to create it",
-        ))
-        .unwrap();
+        })
+    };
+    let Some(expected) = load_or_regenerate(&fixtures_dir().join("ffi-smoke.expected.json"), record) else { return };
 
     // Assert the protocol constants too, not just the output. If someone
     // changes `dt` or the frame count, this reports *that* in one line
@@ -131,21 +116,7 @@ fn the_fixture_matches_the_recorded_expectation() {
     );
 
     assert_eq!(expected["particleCount"].as_u64().unwrap() as u32, count);
-
-    let expected_buffer: Vec<f32> = expected["buffer"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_f64().unwrap() as f32)
-        .collect();
-
-    assert_eq!(expected_buffer.len(), buffer.len(), "buffer length changed");
-    for (index, (actual, wanted)) in buffer.iter().zip(&expected_buffer).enumerate() {
-        assert!(
-            (actual - wanted).abs() <= LIBM_DRIFT_TOLERANCE,
-            "float {index} drifted: got {actual}, expected {wanted}"
-        );
-    }
+    assert_within_libm_drift(&buffer, &floats(&expected["buffer"]));
 }
 
 #[test]

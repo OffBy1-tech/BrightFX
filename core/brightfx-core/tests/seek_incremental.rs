@@ -3,22 +3,17 @@
 //! bit-identical to a from-zero seek on a fresh handle, and anything that
 //! is not a seek forces the next seek to replay.
 
+mod common;
+
 use brightfx_core::schema::{EmitterKeyframe, EmitterTrigger, TriggerKind};
 use brightfx_core::{ParticleFxConfig, Simulation};
-use std::path::PathBuf;
+use common::{fixtures_dir, instance_bits};
 
 const SEED: u64 = 42;
 
 fn track_config() -> ParticleFxConfig {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fixtures/ffi-seek.config.json");
+    let path = fixtures_dir().join("ffi-seek.config.json");
     serde_json::from_str(&std::fs::read_to_string(path).expect("seek fixture config missing")).unwrap()
-}
-
-fn snapshot(sim: &Simulation) -> Vec<f32> {
-    sim.buffer()
-        .iter()
-        .flat_map(|p| [p.x, p.y, p.size, p.rotation, p.color[0], p.color[1], p.color[2], p.color[3]])
-        .collect()
 }
 
 fn fresh_at(time: f32) -> Simulation {
@@ -29,7 +24,8 @@ fn fresh_at(time: f32) -> Simulation {
 
 fn assert_same(a: &Simulation, b: &Simulation, label: &str) {
     assert_eq!(a.particle_count(), b.particle_count(), "particle count differs: {label}");
-    assert_eq!(snapshot(a), snapshot(b), "buffer differs: {label}");
+    // Bit patterns, not `PartialEq`: -0.0 == +0.0 would pass as equal.
+    assert_eq!(instance_bits(a.buffer()), instance_bits(b.buffer()), "buffer differs: {label}");
 }
 
 #[test]

@@ -148,6 +148,8 @@ BRIGHTFX_REGENERATE=1 cargo test -p brightfx-core --test ffi_fixture --test seek
 BRIGHTFX_REGENERATE=1 cargo test -p brightfx-tracks --test cues_fixture
 ```
 
+Only the exact value `1` regenerates; any other value, or none, verifies.
+
 After changing any `extern "C"` signature, regenerate the header:
 
 ```bash

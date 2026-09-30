@@ -5,6 +5,9 @@
 //! and this crate does not: where each character's card sits, where the
 //! lineup stands, and each character's accent color. Every job has exactly
 //! one position, so its track is a single keyframe plus triggers.
+//!
+//! A job's particles outlive its last trigger by up to `lifetimeMax / 60`
+//! seconds, so a host should not cut a job off at that trigger.
 
 use std::collections::BTreeMap;
 

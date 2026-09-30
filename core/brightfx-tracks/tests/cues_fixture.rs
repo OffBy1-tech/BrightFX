@@ -25,7 +25,7 @@ fn generate() -> String {
 fn the_fixture_matches_the_recorded_expectation() {
     let actual = generate();
     let path = fixtures_dir().join("tracks-cues.expected.json");
-    if std::env::var("BRIGHTFX_REGENERATE").is_ok() {
+    if std::env::var("BRIGHTFX_REGENERATE").as_deref() == Ok("1") {
         std::fs::write(&path, &actual).unwrap();
         eprintln!("regenerated {}", path.display());
         return;
