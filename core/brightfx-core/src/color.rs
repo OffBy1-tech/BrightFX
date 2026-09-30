@@ -45,6 +45,14 @@ pub(crate) fn interpolate_hex(c1: &str, c2: &str, factor: f32) -> [f32; 3] {
 /// ascending in [0, 1]. Built once per config load, sampled per particle.
 pub(crate) type Palette = Vec<(f32, [f32; 3])>;
 
+/// The stop a `palette_pick` in [0, 1) lands on in a palette of `len`
+/// stops, each an equal share of the unit range. Clamped, so a pick of
+/// exactly 1.0 (or rounding just below it) still lands on the last stop.
+/// `len` must be non-zero.
+pub(crate) fn palette_index(pick: f32, len: usize) -> usize {
+    ((pick * len as f32) as usize).min(len - 1)
+}
+
 /// Samples a `Palette` at `t` in [0, 1]. Holds the first stop's color
 /// before its offset and the last stop's color after it, and linearly
 /// interpolates between neighbors. `stops` must be non-empty.
@@ -98,6 +106,19 @@ pub(crate) fn hsl_to_rgb(h: f32, s: f32, l: f32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_palette_pick_covers_every_stop_and_never_runs_past_the_last() {
+        assert_eq!(palette_index(0.0, 3), 0);
+        assert_eq!(palette_index(0.34, 3), 1);
+        assert_eq!(palette_index(0.67, 3), 2);
+        assert_eq!(palette_index(0.999_999_9, 3), 2);
+        assert_eq!(palette_index(1.0, 3), 2, "a pick of 1.0 is clamped onto the last stop");
+        assert_eq!(palette_index(0.5, 1), 0);
+        let hits: std::collections::BTreeSet<usize> =
+            (0..1000).map(|i| palette_index(i as f32 / 1000.0, 7)).collect();
+        assert_eq!(hits, (0..7).collect(), "every stop is reachable");
+    }
 
     #[test]
     fn hex_to_rgb_parses_six_digit_hex() {

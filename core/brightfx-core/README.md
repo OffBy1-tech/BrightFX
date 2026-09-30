@@ -139,12 +139,21 @@ the first stop or after the last holds that stop's color. Without stops
 (`null` or empty) the mode falls back to the primary color, like `Single`.
 
 `ColorMode::RandomPalette` (`"random-palette"`) deals each particle one
-`color_stops` entry at spawn, picked uniformly by the seeded RNG, and the
-particle keeps it for life. Offsets are ignored, so each entry is equally
-likely. Because the pick is per particle rather than per spawn order, the
-colours are mixed wherever the particles land -- unlike `RainbowCycle`,
-whose hue follows spawn order and so streaks along a moving emitter's
-path. Without stops it falls back to the primary color. Scrubbing is
+`color_stops` entry, and the particle keeps it for life. Every entry is
+equally likely -- repeat one to weight it. Offsets do not weight the pick;
+they set the order the stops are dealt from (stops are sorted by offset,
+as for `MultiPalette`), and `clamp_to_bounds` still reports an offset
+outside [0, 1]. Because the pick is per particle rather than per spawn
+order, the colours are mixed wherever the particles land -- unlike
+`RainbowCycle`, whose hue follows spawn order and so streaks along a
+moving emitter's path. Without stops it falls back to the primary color.
+
+Each particle's pick is a unit float from a colour RNG of its own, drawn
+at every spawn in every mode and resolved against the current stops each
+frame. So a colour-only config change never moves a particle -- motion
+draws from a separate RNG -- and a live stop edit, or a live switch into
+this mode, recolours the particles already on screen, keeping each one's
+place in the stop order. Both RNGs follow the seed, so scrubbing is
 deterministic: a seek replays the same picks.
 
 The other modes ignore `color_stops`.

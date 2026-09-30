@@ -103,8 +103,9 @@ fn scatter_sweep(y_min: f32, y_max: f32, leg: f32) -> EmitterTrack {
 const RAINBOW: [&str; 8] = ["#F53D3D", "#F5C73D", "#99F53D", "#3DF56B", "#3DF5F5", "#3D6BF5", "#993DF5", "#F53DC7"];
 
 /// `colors` as `colorStops` for `RandomPalette`, which deals them out
-/// uniformly and ignores the offsets; they are spread evenly anyway so
-/// the stops still read sensibly in an editor that shows them.
+/// uniformly. The offsets only fix the order they are dealt from; they are
+/// spread evenly, in the listed order, so the stops also read sensibly in
+/// an editor that shows them.
 fn palette(colors: &[&str]) -> Option<Vec<ColorStop>> {
     let last = (colors.len().max(2) - 1) as f32;
     Some(
@@ -307,7 +308,7 @@ pub fn sprinkle_rain() -> ParticleFxConfig {
     let mut c = base(
         "sprinkle-rain",
         "Sprinkle Rain",
-        "Rainbow sprinkles falling fast from the top edge",
+        "Rainbow sprinkles raining down from the top edge",
         "sprinkle",
         scatter_sweep(-20.0, -20.0, 0.1),
     );

@@ -288,10 +288,10 @@ test("fitTrack refuses a missing dimension instead of writing null keyframes", (
 });
 
 test("fitTrack applies the same schemaVersion gate as setConfig", () => {
-  const config = { ...JSON.parse(seekConfigJson), schemaVersion: 2 };
+  const config = { ...JSON.parse(seekConfigJson), schemaVersion: 3 };
   const envelope = JSON.parse(mod.fitTrack(JSON.stringify(config), 1920, 1080, 1080, 1920));
   assert.equal(envelope.ok, false);
-  assert.match(envelope.error, /unsupported schemaVersion 2/);
+  assert.match(envelope.error, /unsupported schemaVersion 3/);
 });
 
 console.log("node harness: all checks passed");
