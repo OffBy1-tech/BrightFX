@@ -1,8 +1,9 @@
-//! The 13 particle shapes, ported layer for layer from Mouseflare's
-//! `customFxRenderer.ts`. Coordinates are in units of the particle size `s`.
+//! The 14 particle shapes: 13 ported layer for layer from Mouseflare's
+//! `customFxRenderer.ts`, plus the capsule, which BrightFX added for its
+//! rain presets. Coordinates are in units of the particle size `s`.
 
 use super::paint::{GradientColor, Paint};
-use super::path::{Geometry, PathCmd};
+use super::path::{Geometry, PathCmd, KAPPA};
 use crate::schema::ParticleShape;
 
 pub(crate) enum Op {
@@ -31,23 +32,6 @@ pub(crate) struct Shape {
     /// halo is stamped unrotated, which is much cheaper.
     pub symmetric: bool,
 }
-
-#[cfg(test)]
-pub(crate) const ALL: [ParticleShape; 13] = [
-    ParticleShape::Circle,
-    ParticleShape::SparkleStar,
-    ParticleShape::GlowDisc,
-    ParticleShape::Ring,
-    ParticleShape::ShardCrystal,
-    ParticleShape::PlasmaOrb,
-    ParticleShape::SmokePuff,
-    ParticleShape::LightningBolt,
-    ParticleShape::Bubble,
-    ParticleShape::Heart,
-    ParticleShape::SakuraPetal,
-    ParticleShape::Diamond,
-    ParticleShape::Rune,
-];
 
 const fn fill(geometry: Geometry, paint: Paint) -> Layer {
     Layer { geometry, op: Op::Fill, paint }
@@ -240,6 +224,39 @@ static DIAMOND: Shape = Shape {
     )],
 };
 
+/// Half the capsule's width, in units of `s`: a 2.3:1 length to width,
+/// between the 8×20 and 9×20 px capsules of the reference rain effects
+/// the rain presets were matched against. `s` is the half-length, as for
+/// the diamond, so the tips sit at y = ±1 and each round end is a half
+/// circle of this radius.
+const CAPSULE_R: f32 = 1.0 / 2.3;
+/// Half the straight run between the two round ends.
+const CAPSULE_H: f32 = 1.0 - CAPSULE_R;
+/// Control-point offset for a quarter circle of `CAPSULE_R` as a cubic.
+const CAPSULE_K: f32 = KAPPA * CAPSULE_R;
+
+static CAPSULE: Shape = Shape {
+    extent: 1.0,
+    // `s` is a half-length, so matching the circle's 0.5 px radius floor
+    // takes a larger one: at 0.6 a floored capsule covers the same area as
+    // a floored circle (render test `a_tiny_capsule_...`).
+    min_size: 0.6,
+    symmetric: false,
+    layers: &[fill(
+        Geometry::Path(&[
+            Move(CAPSULE_R, -CAPSULE_H),
+            Line(CAPSULE_R, CAPSULE_H),
+            Cubic(CAPSULE_R, CAPSULE_H + CAPSULE_K, CAPSULE_K, 1.0, 0.0, 1.0),
+            Cubic(-CAPSULE_K, 1.0, -CAPSULE_R, CAPSULE_H + CAPSULE_K, -CAPSULE_R, CAPSULE_H),
+            Line(-CAPSULE_R, -CAPSULE_H),
+            Cubic(-CAPSULE_R, -CAPSULE_H - CAPSULE_K, -CAPSULE_K, -1.0, 0.0, -1.0),
+            Cubic(CAPSULE_K, -1.0, CAPSULE_R, -CAPSULE_H - CAPSULE_K, CAPSULE_R, -CAPSULE_H),
+            Close,
+        ]),
+        Paint::Tint,
+    )],
+};
+
 pub(crate) fn shape_for(shape: ParticleShape) -> &'static Shape {
     match shape {
         ParticleShape::Circle => &CIRCLE,
@@ -255,6 +272,7 @@ pub(crate) fn shape_for(shape: ParticleShape) -> &'static Shape {
         ParticleShape::SakuraPetal => &SAKURA_PETAL,
         ParticleShape::Diamond => &DIAMOND,
         ParticleShape::Rune => &RUNE,
+        ParticleShape::Capsule => &CAPSULE,
     }
 }
 
@@ -265,14 +283,14 @@ mod tests {
 
     #[test]
     fn every_shape_has_at_least_one_layer() {
-        for shape in ALL {
+        for shape in ParticleShape::ALL {
             assert!(!shape_for(shape).layers.is_empty(), "{shape:?} has no layers");
         }
     }
 
     #[test]
     fn every_layer_fits_inside_its_shape_extent_including_stroke_width() {
-        for shape in ALL {
+        for shape in ParticleShape::ALL {
             let def = shape_for(shape);
             for (i, layer) in def.layers.iter().enumerate() {
                 let half = match layer.op {
@@ -295,7 +313,7 @@ mod tests {
 
     #[test]
     fn radial_layers_declare_the_radius_their_geometry_uses() {
-        for shape in ALL {
+        for shape in ParticleShape::ALL {
             for layer in shape_for(shape).layers {
                 if let Paint::Radial { radius, .. } = layer.paint {
                     match layer.geometry {
@@ -324,7 +342,7 @@ mod tests {
 
     #[test]
     fn every_radial_gradient_has_at_least_two_stops() {
-        for shape in ALL {
+        for shape in ParticleShape::ALL {
             for layer in shape_for(shape).layers {
                 if let Paint::Radial { stops, .. } = layer.paint {
                     assert!(stops.len() >= 2, "{shape:?} has a radial paint with {} stops", stops.len());

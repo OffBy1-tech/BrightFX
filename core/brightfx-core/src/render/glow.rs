@@ -523,10 +523,10 @@ mod tests {
 
     #[test]
     fn the_footprint_covers_the_rotated_box_for_every_shape_and_rotation() {
-        use super::super::shapes::{shape_for, ALL};
+        use super::super::shapes::shape_for;
         let mut raster = Rasterizer::new();
         let mut coverage = Vec::new();
-        for shape in ALL {
+        for shape in ParticleShape::ALL {
             let sprite = build_sprite(shape_for(shape), 9.0, 12.0, 1.0, f32::INFINITY, &mut raster, &mut coverage);
             let half = sprite.side as f32 * 0.5;
             let radius = footprint_radius(&sprite);

@@ -2,9 +2,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// The config schema version this build writes. Version 2 added the
-/// `random-palette` colour mode and the `capsule` shape; nothing was
-/// renamed or removed, so a version 1 config is a valid version 2 body.
-pub const SCHEMA_VERSION: u32 = 2;
+/// `random-palette` colour mode; version 3 the `capsule` shape and
+/// `spinDirection`. Nothing was renamed or removed, so an older config is
+/// a valid current body once relabelled (`spinDirection` defaults).
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// The oldest config schema version this build still reads. `AbiSimulation`
 /// accepts `MIN_SCHEMA_VERSION..=SCHEMA_VERSION`, migrates an older config
@@ -28,6 +29,30 @@ pub enum ParticleShape {
     SakuraPetal,
     Diamond,
     Rune,
+    /// A rounded rectangle 2.3 times as long as it is wide; `size` is its
+    /// half-length.
+    Capsule,
+}
+
+impl ParticleShape {
+    /// Every shape, in declaration order. For hosts and tools that list or
+    /// render them all; `every_shape_is_in_all_once` keeps it complete.
+    pub const ALL: [ParticleShape; 14] = [
+        ParticleShape::Circle,
+        ParticleShape::SparkleStar,
+        ParticleShape::GlowDisc,
+        ParticleShape::Ring,
+        ParticleShape::ShardCrystal,
+        ParticleShape::PlasmaOrb,
+        ParticleShape::SmokePuff,
+        ParticleShape::LightningBolt,
+        ParticleShape::Bubble,
+        ParticleShape::Heart,
+        ParticleShape::SakuraPetal,
+        ParticleShape::Diamond,
+        ParticleShape::Rune,
+        ParticleShape::Capsule,
+    ];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -62,6 +87,26 @@ pub enum ColorMode {
     /// it for life. Offsets do not weight the pick; they set the order the
     /// stops are dealt from, which is what a live stop edit follows.
     RandomPalette,
+}
+
+/// Which way particles turn. Each particle draws a signed rotation speed
+/// `v` uniformly from `rotationSpeedMin..rotationSpeedMax`; this decides
+/// what happens to its sign.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SpinDirection {
+    /// The particle turns at `v` as drawn: the range's sign sets the
+    /// direction (a positive range turns clockwise, a range spanning zero
+    /// gives both), as before this field existed.
+    #[default]
+    Fixed,
+    /// The particle turns at `v` or `-v`, a coin flip at spawn, so speeds
+    /// are symmetric about zero: a positive range gives magnitudes from it
+    /// in both directions, and a range spanning zero gives speeds up to
+    /// the larger of `|min|` and `|max|` either way. The flip draws from
+    /// the motion RNG, so switching a config between the two re-lays out
+    /// the whole effect, as changing any motion field does.
+    Random,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -178,6 +223,10 @@ pub struct ParticleFxConfig {
     pub vortex_attraction: f32,
     pub rotation_speed_min: f32,
     pub rotation_speed_max: f32,
+    /// Optional; configs written before schema version 3 omit it and get
+    /// `fixed`.
+    #[serde(default)]
+    pub spin_direction: SpinDirection,
 
     pub lifetime_min: f32,
     pub lifetime_max: f32,
@@ -318,6 +367,7 @@ impl Default for ParticleFxConfig {
             vortex_attraction: 0.0,
             rotation_speed_min: 0.0,
             rotation_speed_max: 1.0,
+            spin_direction: SpinDirection::Fixed,
             lifetime_min: 30.0,
             lifetime_max: 60.0,
             start_size: 4.0,
@@ -341,6 +391,32 @@ impl Default for ParticleFxConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_shape_is_in_all_once() {
+        // The match is exhaustive, so a new variant fails to compile here
+        // until it is given an index, and the assert then fails until it
+        // is in ALL at that index.
+        for (i, shape) in ParticleShape::ALL.iter().enumerate() {
+            let index = match shape {
+                ParticleShape::Circle => 0,
+                ParticleShape::SparkleStar => 1,
+                ParticleShape::GlowDisc => 2,
+                ParticleShape::Ring => 3,
+                ParticleShape::ShardCrystal => 4,
+                ParticleShape::PlasmaOrb => 5,
+                ParticleShape::SmokePuff => 6,
+                ParticleShape::LightningBolt => 7,
+                ParticleShape::Bubble => 8,
+                ParticleShape::Heart => 9,
+                ParticleShape::SakuraPetal => 10,
+                ParticleShape::Diamond => 11,
+                ParticleShape::Rune => 12,
+                ParticleShape::Capsule => 13,
+            };
+            assert_eq!(index, i, "{shape:?} is out of place in ParticleShape::ALL");
+        }
+    }
 
     #[test]
     fn particle_shape_serializes_kebab_case() {
@@ -403,6 +479,7 @@ mod tests {
             vortex_attraction: 0.0,
             rotation_speed_min: 0.0,
             rotation_speed_max: 2.0,
+            spin_direction: SpinDirection::Fixed,
             lifetime_min: 30.0,
             lifetime_max: 60.0,
             start_size: 4.0,

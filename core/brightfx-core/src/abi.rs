@@ -366,7 +366,8 @@ const POISONED_MESSAGE: &str = "simulation is poisoned by a panic; create a new 
 /// Brings a supported older config forward to `SCHEMA_VERSION`, one
 /// version at a time. This is where each future step slots in.
 fn migrate(value: &mut serde_json::Value, from: u64) {
-    // 1 -> 2 only added vocabulary: the body is already valid.
+    // 1 -> 2 -> 3 only added vocabulary (and a defaulted field): the body
+    // is already valid.
     if from < SCHEMA_VERSION as u64 {
         value["schemaVersion"] = serde_json::json!(SCHEMA_VERSION);
     }
@@ -391,8 +392,8 @@ mod tests {
         let err = parse_config("{ not json").unwrap_err();
         assert!(err.starts_with("invalid JSON"), "got: {err}");
 
-        let err = parse_config(r#"{"schemaVersion": 3, "somethingEntirelyNew": true}"#).unwrap_err();
-        assert!(err.contains("unsupported schemaVersion 3"), "got: {err}");
+        let err = parse_config(r#"{"schemaVersion": 4, "somethingEntirelyNew": true}"#).unwrap_err();
+        assert!(err.contains("unsupported schemaVersion 4"), "got: {err}");
 
         let err = parse_config(r#"{"glowRadius": 1}"#).unwrap_err();
         assert_eq!(err, "missing or non-numeric schemaVersion");
@@ -525,7 +526,7 @@ mod tests {
     fn the_version_is_checked_before_the_body_is_deserialized() {
         // A future config whose body today's struct cannot parse must still
         // produce the version error, not a confusing serde error.
-        let json = r#"{"schemaVersion": 3, "somethingEntirelyNew": true}"#;
+        let json = r#"{"schemaVersion": 4, "somethingEntirelyNew": true}"#;
         let mut sim = AbiSimulation::new(42);
 
         let result = parse(&sim.set_config(json));
@@ -535,34 +536,39 @@ mod tests {
     }
 
     #[test]
-    fn a_version_1_config_still_loads_and_reads_back_as_the_current_version() {
-        // v2 only added vocabulary (random-palette, capsule), so a v1 body
-        // is a valid v2 body and migrates by relabelling.
-        let mut value = serde_json::to_value(ParticleFxConfig::default()).unwrap();
-        value["schemaVersion"] = serde_json::json!(1);
+    fn older_versions_still_load_and_read_back_as_the_current_version() {
+        // v2 and v3 only added vocabulary (random-palette; capsule and
+        // spinDirection), so an older body is a valid current body once
+        // relabelled -- spinDirection defaults when it is absent.
+        for version in [1u64, 2] {
+            let mut value = serde_json::to_value(ParticleFxConfig::default()).unwrap();
+            value["schemaVersion"] = serde_json::json!(version);
+            value.as_object_mut().unwrap().remove("spinDirection");
 
-        let config = parse_config(&value.to_string()).unwrap();
-        assert_eq!(config.schema_version, SCHEMA_VERSION);
+            let config = parse_config(&value.to_string()).unwrap();
+            assert_eq!(config.schema_version, SCHEMA_VERSION, "v{version}");
+            assert_eq!(config.spin_direction, crate::schema::SpinDirection::Fixed, "v{version}");
 
-        let mut sim = AbiSimulation::new(42);
-        assert_eq!(parse(&sim.set_config(&value.to_string()))["ok"], true);
+            let mut sim = AbiSimulation::new(42);
+            assert_eq!(parse(&sim.set_config(&value.to_string()))["ok"], true, "v{version}");
+        }
     }
 
     #[test]
-    fn the_current_version_is_2_and_loads() {
-        assert_eq!(SCHEMA_VERSION, 2);
+    fn the_current_version_is_3_and_loads() {
+        assert_eq!(SCHEMA_VERSION, 3);
         let json = serde_json::to_string(&ParticleFxConfig::default()).unwrap();
-        assert_eq!(parse_config(&json).unwrap().schema_version, 2);
+        assert_eq!(parse_config(&json).unwrap().schema_version, 3);
     }
 
     #[test]
     fn versions_outside_the_supported_range_are_rejected_clearly() {
-        for version in [0u64, 3] {
+        for version in [0u64, 4] {
             let mut value = serde_json::to_value(ParticleFxConfig::default()).unwrap();
             value["schemaVersion"] = serde_json::json!(version);
             let message = parse_config(&value.to_string()).unwrap_err();
             assert!(message.contains(&format!("unsupported schemaVersion {version}")), "got: {message}");
-            assert!(message.contains("1-2"), "message must name the supported range: {message}");
+            assert!(message.contains("1-3"), "message must name the supported range: {message}");
         }
     }
 

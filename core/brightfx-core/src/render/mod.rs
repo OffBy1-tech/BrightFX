@@ -679,7 +679,7 @@ mod tests {
     fn every_shape_draws_something_and_stays_inside_its_extent_at_every_size_with_and_without_glow() {
         const W: u32 = 220;
         const CENTER: f32 = 110.0;
-        for shape in shapes::ALL {
+        for shape in ParticleShape::ALL {
             let extent = shapes::shape_for(shape).extent;
             for &size in &[2.0f32, 8.0, 30.0] {
                 for glow_on in [false, true] {
@@ -733,6 +733,77 @@ mod tests {
         assert_eq!(pixel(&upright, 41, 20, 10)[3], 255, "upright diamond is tall");
         assert_eq!(pixel(&upright, 41, 10, 20)[3], 0, "and narrow");
         assert_eq!(pixel(&turned, 41, 10, 20)[3], 255, "turned diamond is wide");
+    }
+
+    /// The bounding box of a `w` x `h` frame's painted pixels (alpha over
+    /// half), as (width, height). Panics on a frame with nothing painted.
+    fn painted_extent(f: &[u8], w: u32, h: u32) -> (u32, u32) {
+        let mut bounds: Option<(u32, u32, u32, u32)> = None;
+        for y in 0..h {
+            for x in 0..w {
+                if pixel(f, w, x, y)[3] > 127 {
+                    let (x0, x1, y0, y1) = bounds.unwrap_or((x, x, y, y));
+                    bounds = Some((x0.min(x), x1.max(x), y0.min(y), y1.max(y)));
+                }
+            }
+        }
+        let (x0, x1, y0, y1) = bounds.expect("nothing painted above half alpha");
+        (x1 + 1 - x0, y1 + 1 - y0)
+    }
+
+    #[test]
+    fn a_capsule_is_twice_its_size_long_with_a_2_3_to_1_aspect() {
+        // size is the half-length, as for the diamond: size 20 is a 40 px
+        // capsule, 40 / 2.3 = 17.4 px across.
+        let f = render(ParticleShape::Capsule, BlendMode::SourceOver, &[particle(40.5, 40.5, 20.0, 0.0, RED)], 81, 81, 1.0);
+        let (w, h) = painted_extent(&f, 81, 81);
+        assert!((39..=41).contains(&h), "capsule is {h} px long");
+        assert!((16..=19).contains(&w), "capsule is {w} px wide");
+    }
+
+    #[test]
+    fn a_capsule_has_round_ends_and_straight_sides() {
+        let f = render(ParticleShape::Capsule, BlendMode::SourceOver, &[particle(40.5, 40.5, 20.0, 0.0, RED)], 81, 81, 1.0);
+        // The half-width is 8.7: a side 7 px out is solid along the whole
+        // straight run (half-length 20 - 8.7 = 11.3), where a lens or a
+        // diamond would already be narrowing.
+        for dy in [-10i32, 0, 10] {
+            assert_eq!(pixel(&f, 81, 47, (40 + dy) as u32)[3], 255, "side at dy {dy}");
+        }
+        // The corners of the bounding box are cut away by the round ends.
+        assert_eq!(pixel(&f, 81, 47, 58)[3], 0, "bottom-right corner");
+        assert_eq!(pixel(&f, 81, 33, 22)[3], 0, "top-left corner");
+        // But the tip itself is painted.
+        assert_eq!(pixel(&f, 81, 40, 59)[3], 255, "bottom tip");
+    }
+
+    #[test]
+    fn a_quarter_turn_lays_a_capsule_on_its_side() {
+        let turned = render(
+            ParticleShape::Capsule,
+            BlendMode::SourceOver,
+            &[particle(40.5, 40.5, 20.0, std::f32::consts::FRAC_PI_2, RED)],
+            81,
+            81,
+            1.0,
+        );
+        let (w, h) = painted_extent(&turned, 81, 81);
+        assert!((39..=41).contains(&w), "turned capsule is {w} px long");
+        assert!((16..=19).contains(&h), "turned capsule is {h} px tall");
+    }
+
+    #[test]
+    fn a_tiny_capsule_still_paints_a_dot_as_strong_as_the_circles_floor() {
+        // The capsule's size is a half-length, so its floor has to be larger
+        // than the circle's radius floor to cover as much.
+        let total = |f: &[u8]| f.chunks(4).map(|px| px[3] as u32).sum::<u32>();
+        let circle = render(ParticleShape::Circle, BlendMode::SourceOver, &[particle(20.5, 20.5, 0.01, 0.0, RED)], 40, 40, 1.0);
+        for rotation in [0.0, std::f32::consts::FRAC_PI_4] {
+            let f = render(ParticleShape::Capsule, BlendMode::SourceOver, &[particle(20.5, 20.5, 0.01, rotation, RED)], 40, 40, 1.0);
+            assert!(pixel(&f, 40, 20, 20)[3] > 100, "rotation {rotation}: min_size gives a visible dot, got {:?}", pixel(&f, 40, 20, 20));
+            let ratio = total(&f) as f32 / total(&circle) as f32;
+            assert!((0.9..=1.1).contains(&ratio), "rotation {rotation}: covers {ratio} of the circle's floor");
+        }
     }
 
     #[test]

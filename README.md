@@ -78,7 +78,7 @@ which config fields it deliberately ignores.
 A `.brightfx.json` effect is a single config object: emitter behavior (rate,
 burst size, emission pattern, spread, velocity inheritance), physics (gravity,
 drag, turbulence, vortex), lifetime and size curves, and color. The vocabulary
-carried today: **13 shapes**, **6 emission patterns**, **6 color modes**,
+carried today: **14 shapes**, **6 emission patterns**, **6 color modes**,
 **4 size curves**, **4 blend modes**.
 
 Configs are read permissively — out-of-range values are clamped rather than
@@ -100,7 +100,7 @@ position every frame.
 - Cross-language verification — Node, Swift, and C# each replay identical
   protocols from shared fixtures and must reproduce the same particle
   buffers, both driven live and seeked from a baked emitter track.
-- Rendering: the 13 shapes, glow, and the four blend modes rasterized in
+- Rendering: the 14 shapes, glow, and the four blend modes rasterized in
   core into a premultiplied RGBA8 frame, guarded by a golden frame that
   Node, Swift, and C# each reproduce.
 - Continuous integration: every push to `main` and every pull request runs
