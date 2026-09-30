@@ -22,7 +22,7 @@ fi
 echo "==> fixtures and presets are not rewritten by a verify run"
 if ! git -C "$core" diff --quiet -- fixtures/ ../presets/; then
   echo "ERROR: running the tests modified the fixtures or presets." >&2
-  echo "BRIGHTFX_REGENERATE is probably set in this environment, which turns" >&2
+  echo "BRIGHTFX_REGENERATE=1 is probably set in this environment, which turns" >&2
   echo "the fixture tests into a no-op that re-baselines instead of verifying." >&2
   git -C "$core" --no-pager diff --stat -- fixtures/ ../presets/ >&2
   exit 1

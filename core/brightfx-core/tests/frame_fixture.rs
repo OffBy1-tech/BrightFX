@@ -7,8 +7,10 @@
 
 #![cfg(feature = "render")]
 
+mod common;
+
 use brightfx_core::abi::AbiSimulation;
-use std::path::PathBuf;
+use common::{fixtures_dir, regenerating};
 
 const SEED: u64 = 42;
 const FRAMES: usize = 120;
@@ -22,10 +24,6 @@ const SCALE: f32 = 1.0;
 const CHANNEL_TOLERANCE: u8 = 4;
 /// 0.5% of the frame.
 const MAX_DIFFERING_PIXELS: usize = 120;
-
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fixtures")
-}
 
 /// The emitter's state on every frame, recorded in the fixture for the same
 /// reason as in `ffi_fixture.rs`: the harnesses replay numbers, not a
@@ -90,7 +88,7 @@ fn the_frame_matches_the_recorded_expectation() {
     let json_path = fixtures_dir().join("ffi-frame.expected.json");
     let rgba_path = fixtures_dir().join("ffi-frame.expected.rgba");
 
-    if std::env::var("BRIGHTFX_REGENERATE").is_ok() {
+    if regenerating() {
         let json = serde_json::json!({
             "seed": SEED,
             "frames": FRAMES,
