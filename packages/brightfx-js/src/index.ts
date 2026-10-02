@@ -65,6 +65,10 @@ export type EffectConfig = {
   emitterTrack?: EmitterTrack | null;
   /** Schema version 3+. Omitted means `"fixed"`. */
   spinDirection?: SpinDirection;
+  /** Schema version 4+. Logical px. Removes a particle once its center is
+   *  more than this far outside the simulation's bounds (`setViewport` or
+   *  `setBounds`). Omitted or `null` never culls. */
+  cullMargin?: number | null;
 } & Record<string, unknown>;
 
 export interface Cue {
@@ -212,6 +216,14 @@ export class Simulation {
 
   setViewport(width: number, height: number, scale = 1): ConfigResult {
     return JSON.parse(this.sim.setViewport(width, height, scale)) as ConfigResult;
+  }
+
+  /** The logical-pixel size `cullMargin` is measured from, for a host that
+   *  draws its own sprites and never calls `setViewport` (which sets it
+   *  itself, as `width / scale` by `height / scale`). Changing it makes the
+   *  next `seek` replay from zero. */
+  setBounds(width: number, height: number): void {
+    this.sim.setBounds(width, height);
   }
 
   setEmitter(x: number, y: number, vx: number, vy: number, active: boolean): void {

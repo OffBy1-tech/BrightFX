@@ -174,3 +174,34 @@ test("init with a second, different source after success throws a source-mismatc
   const bytes = readFileSync(join(here, "..", "wasm", "brightfx_wasm_bg.wasm"));
   await assert.rejects(() => BrightFX.init(bytes), /source that differs/);
 });
+
+const cullConfig = { ...JSON.parse(read("ffi-seek.config.json")), cullMargin: 0 };
+
+function seekCount(setup) {
+  const sim = engine.create(42);
+  assert.equal(sim.setConfig(cullConfig).ok, true);
+  setup(sim);
+  sim.seek(1.5);
+  const count = sim.particleCount();
+  const particles = sim.particleList();
+  sim.dispose();
+  return { count, particles };
+}
+
+test("setBounds lets cullMargin remove particles that leave the bounds", () => {
+  const open = seekCount(() => {});
+  const bounded = seekCount((sim) => sim.setBounds(200, 120));
+  assert.ok(open.count > 0, "test is vacuous: nothing to cull");
+  assert.ok(bounded.count < open.count, `nothing culled: ${bounded.count} of ${open.count}`);
+  for (const p of bounded.particles) {
+    assert.ok(p.x >= 0 && p.x <= 200 && p.y >= 0 && p.y <= 120, `(${p.x}, ${p.y}) is outside the bounds`);
+  }
+});
+
+test("setViewport sets the same bounds, in logical units", () => {
+  const viaBounds = seekCount((sim) => sim.setBounds(100, 60));
+  // 200x120 device pixels at scale 2 is a 100x60 logical frame.
+  const viaViewport = seekCount((sim) => sim.setViewport(200, 120, 2));
+  assert.equal(viaViewport.count, viaBounds.count);
+  assert.deepEqual(viaViewport.particles, viaBounds.particles);
+});
