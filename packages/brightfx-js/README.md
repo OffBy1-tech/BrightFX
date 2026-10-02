@@ -23,6 +23,7 @@ const sim = engine.create(seed);                 // one Simulation per instance
 
 sim.setConfig(effectConfig);                     // -> {ok:true,clamped:[...]} | {ok:false,error}
 sim.setViewport(width, height, scale);            // device pixels, and pixels per logical unit
+sim.setBounds(width, height);                    // logical px, for sprite hosts; setViewport sets it itself
 
 sim.setEmitter(x, y, vx, vy, active);
 sim.triggerBurst();

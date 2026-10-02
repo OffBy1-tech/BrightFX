@@ -8,6 +8,7 @@
   "probeSize": 6,
   "probes": {
     "raster": { "right": 0, "color": [0, 0, 255] },
-    "seek": { "right": 8, "color": [0, 255, 0] }
+    "seek": { "right": 8, "color": [0, 255, 0] },
+    "bounds": { "right": 16, "color": [255, 0, 255] }
   }
 }

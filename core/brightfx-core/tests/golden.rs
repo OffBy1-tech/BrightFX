@@ -39,6 +39,7 @@ fn fire_config() -> ParticleFxConfig {
         spin_direction: SpinDirection::Fixed,
         lifetime_min: 40.0,
         lifetime_max: 80.0,
+        cull_margin: None,
         start_size: 6.0,
         peak_size: 9.0,
         end_size: 0.0,

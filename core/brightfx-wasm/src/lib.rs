@@ -85,6 +85,14 @@ impl BrightFx {
         self.inner.set_viewport(width, height, scale)
     }
 
+    /// Sets the logical-pixel bounds `cullMargin` is measured from, for a
+    /// host that draws its own sprites and never calls `setViewport` (which
+    /// sets them itself).
+    #[wasm_bindgen(js_name = setBounds)]
+    pub fn set_bounds(&mut self, width: f32, height: f32) {
+        self.inner.set_bounds(width, height);
+    }
+
     /// Rasterizes the current particle buffer into the frame.
     pub fn render(&mut self) {
         self.inner.render();

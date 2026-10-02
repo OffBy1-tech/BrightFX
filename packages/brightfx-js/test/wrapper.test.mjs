@@ -174,3 +174,45 @@ test("init with a second, different source after success throws a source-mismatc
   const bytes = readFileSync(join(here, "..", "wasm", "brightfx_wasm_bg.wasm"));
   await assert.rejects(() => BrightFX.init(bytes), /source that differs/);
 });
+
+const cullConfig = JSON.parse(read("ffi-seek.config.json"));
+
+function seekCount(setup, cullMargin = 0) {
+  const sim = engine.create(42);
+  assert.equal(sim.setConfig({ ...cullConfig, cullMargin }).ok, true);
+  setup(sim);
+  sim.seek(1.5);
+  const count = sim.particleCount();
+  const particles = sim.particleList();
+  sim.dispose();
+  return { count, particles };
+}
+
+test("setBounds lets cullMargin remove particles that leave the bounds", () => {
+  const margin = 50;
+  const width = 200;
+  const height = 120;
+  const open = seekCount(() => {}, margin);
+  const bounded = seekCount((sim) => sim.setBounds(width, height), margin);
+  assert.ok(open.count > 0, "test is vacuous: nothing to cull");
+  assert.ok(bounded.count > 0, "test is vacuous: the bounds cull everything");
+  assert.ok(bounded.count < open.count, `nothing culled: ${bounded.count} of ${open.count}`);
+  for (const p of bounded.particles) {
+    assert.ok(
+      p.x >= -margin && p.x <= width + margin && p.y >= -margin && p.y <= height + margin,
+      `(${p.x}, ${p.y}) is outside the bounds plus margin`,
+    );
+  }
+});
+
+test("setViewport sets the same bounds, in logical units", () => {
+  const viaBounds = seekCount((sim) => sim.setBounds(100, 60), 50);
+  // Margin 50, so some particles survive at 100x60 and the sizes can be told apart.
+  // 200x120 device pixels at scale 2 is a 100x60 logical frame.
+  const viaViewport = seekCount((sim) => sim.setViewport(200, 120, 2), 50);
+  assert.ok(viaBounds.count > 0, "test is vacuous: the 100x60 bounds cull everything");
+  const wider = seekCount((sim) => sim.setBounds(200, 120), 50);
+  assert.ok(viaBounds.count < wider.count, "test is vacuous: 100x60 culls no more than 200x120, so device px would pass too");
+  assert.equal(viaViewport.count, viaBounds.count);
+  assert.deepEqual(viaViewport.particles, viaBounds.particles);
+});
