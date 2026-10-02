@@ -418,8 +418,7 @@ mod tests {
 
     #[test]
     fn cull_margin_round_trips_as_camel_case() {
-        let mut config = ParticleFxConfig::default();
-        config.cull_margin = Some(40.0);
+        let config = ParticleFxConfig { cull_margin: Some(40.0), ..Default::default() };
         let json = serde_json::to_value(&config).unwrap();
         assert_eq!(json["cullMargin"], 40.0);
         let back: ParticleFxConfig = serde_json::from_value(json).unwrap();
@@ -428,8 +427,7 @@ mod tests {
 
     #[test]
     fn a_negative_cull_margin_is_raised_to_zero_and_reported() {
-        let mut config = ParticleFxConfig::default();
-        config.cull_margin = Some(-5.0);
+        let mut config = ParticleFxConfig { cull_margin: Some(-5.0), ..Default::default() };
         let changed = config.clamp_to_bounds();
         assert_eq!(config.cull_margin, Some(0.0));
         assert!(changed.contains(&"cullMargin"));
@@ -437,8 +435,7 @@ mod tests {
 
     #[test]
     fn an_absurd_cull_margin_is_capped_and_an_absent_one_is_left_alone() {
-        let mut config = ParticleFxConfig::default();
-        config.cull_margin = Some(1.0e9);
+        let mut config = ParticleFxConfig { cull_margin: Some(1.0e9), ..Default::default() };
         assert!(config.clamp_to_bounds().contains(&"cullMargin"));
         assert_eq!(config.cull_margin, Some(10_000.0));
 
