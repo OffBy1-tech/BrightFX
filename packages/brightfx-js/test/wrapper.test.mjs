@@ -177,9 +177,9 @@ test("init with a second, different source after success throws a source-mismatc
 
 const cullConfig = { ...JSON.parse(read("ffi-seek.config.json")), cullMargin: 0 };
 
-function seekCount(setup) {
+function seekCount(setup, cullMargin = 0) {
   const sim = engine.create(42);
-  assert.equal(sim.setConfig(cullConfig).ok, true);
+  assert.equal(sim.setConfig({ ...cullConfig, cullMargin }).ok, true);
   setup(sim);
   sim.seek(1.5);
   const count = sim.particleCount();
@@ -199,9 +199,13 @@ test("setBounds lets cullMargin remove particles that leave the bounds", () => {
 });
 
 test("setViewport sets the same bounds, in logical units", () => {
-  const viaBounds = seekCount((sim) => sim.setBounds(100, 60));
+  const viaBounds = seekCount((sim) => sim.setBounds(100, 60), 50);
+  // A margin of 50 keeps some particles at these sizes (0 culls them all).
   // 200x120 device pixels at scale 2 is a 100x60 logical frame.
-  const viaViewport = seekCount((sim) => sim.setViewport(200, 120, 2));
+  const viaViewport = seekCount((sim) => sim.setViewport(200, 120, 2), 50);
+  assert.ok(viaBounds.count > 0, "test is vacuous: the 100x60 bounds cull everything");
+  const wider = seekCount((sim) => sim.setBounds(200, 120), 50);
+  assert.ok(viaBounds.count < wider.count, "test is vacuous: 100x60 culls no more than 200x120, so device px would pass too");
   assert.equal(viaViewport.count, viaBounds.count);
   assert.deepEqual(viaViewport.particles, viaBounds.particles);
 });
