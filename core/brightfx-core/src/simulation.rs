@@ -1814,6 +1814,27 @@ mod tests {
     }
 
     #[test]
+    fn a_particle_that_spawns_beyond_the_margin_is_culled_on_its_first_step() {
+        // The emitter sits 50 px left of the bounds and the particle is
+        // spawned inside `step`, before the cull, so it never survives a
+        // step if the margin does not reach the emitter.
+        let spawn_outside = |margin: f32| {
+            let mut config = base_config();
+            config.emitter.spawn_rate_while_active = 1.0;
+            config.initial_speed_min = 0.0;
+            config.initial_speed_max = 0.0;
+            config.cull_margin = Some(margin);
+            let mut sim = Simulation::new(config, 7);
+            sim.set_bounds(100.0, 100.0);
+            sim.set_emitter(-50.0, 50.0, 0.0, 0.0, true);
+            sim.advance(TICK);
+            sim.particle_count()
+        };
+        assert_eq!(spawn_outside(60.0), 1, "test is vacuous: nothing spawned");
+        assert_eq!(spawn_outside(5.0), 0, "kept a particle spawned beyond the margin");
+    }
+
+    #[test]
     fn every_edge_culls() {
         // Moves the runner along each axis by rotating the emission angle.
         for (angle, label) in [(0.0, "right"), (90.0, "down"), (180.0, "left"), (270.0, "up")] {
