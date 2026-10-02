@@ -55,12 +55,12 @@ Culling is permanent. A particle that leaves and would later fall back in
 (confetti thrown upward past the top edge) is gone. The field is opt-in per
 preset, so authors can pick a large enough margin or leave it off.
 
-The same applies to particles entering the frame, not only leaving it. A
-particle spawns at the emitter (+/-2 px) inside `step`, before the cull, so
-one whose first-step position is more than `cullMargin` outside the bounds is
-dropped before it is ever drawn. Edge-spawned presets put the emitter
-off-screen, so the margin must cover the emitter's distance outside the
-bounds plus the jitter and one step of travel.
+Entering is different from leaving. A particle is exempt from the cull until
+it has been inside the margin rectangle (bounds plus `cullMargin`) once, its
+spawn position included, so an emitter placed outside the frame works with any
+margin, including 0. See `2026-10-02-cull-entry-exemption-design.md`. The
+first version of this feature culled a particle that spawned beyond the margin
+on its first step, which made every off-screen emitter vanish.
 
 ## Out of scope
 
