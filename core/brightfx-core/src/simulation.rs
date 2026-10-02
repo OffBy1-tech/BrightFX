@@ -741,6 +741,7 @@ mod tests {
             spin_direction: SpinDirection::Fixed,
             lifetime_min: 100.0,
             lifetime_max: 100.0,
+            cull_margin: None,
             start_size: 10.0,
             peak_size: 10.0,
             end_size: 0.0,

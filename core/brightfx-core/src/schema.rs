@@ -3,9 +3,10 @@ use serde::{Deserialize, Serialize};
 
 /// The config schema version this build writes. Version 2 added the
 /// `random-palette` colour mode; version 3 the `capsule` shape and
-/// `spinDirection`. Nothing was renamed or removed, so an older config is
-/// a valid current body once relabelled (`spinDirection` defaults).
-pub const SCHEMA_VERSION: u32 = 3;
+/// `spinDirection`; version 4 `cullMargin`. Nothing was renamed or removed,
+/// so an older config is a valid current body once relabelled
+/// (`spinDirection` and `cullMargin` default).
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// The oldest config schema version this build still reads. `AbiSimulation`
 /// accepts `MIN_SCHEMA_VERSION..=SCHEMA_VERSION`, migrates an older config
@@ -170,6 +171,10 @@ pub struct EmitterTrigger {
 /// ceiling only when `seek` silently stops short of them.
 pub const MAX_EMITTER_TRACK_DURATION: f32 = 600.0;
 
+/// Upper bound on `cullMargin`, in logical px. Far past any real frame, so
+/// it only stops an absurd value from overflowing the comparison.
+const MAX_CULL_MARGIN: f32 = 10_000.0;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EmitterTrack {
@@ -230,6 +235,12 @@ pub struct ParticleFxConfig {
 
     pub lifetime_min: f32,
     pub lifetime_max: f32,
+    /// Optional; schema version 3 and earlier omit it. Logical px. When set
+    /// and the host has given the simulation bounds, a particle is removed
+    /// once its center is more than this far outside them. `None` never
+    /// culls.
+    #[serde(default)]
+    pub cull_margin: Option<f32>,
     pub start_size: f32,
     pub peak_size: f32,
     pub end_size: f32,
@@ -291,6 +302,10 @@ impl ParticleFxConfig {
 
         if let Some(track) = self.emitter_track.as_mut() {
             clamp(&mut track.duration, 0.0, MAX_EMITTER_TRACK_DURATION, "emitterTrack.duration");
+        }
+
+        if let Some(margin) = self.cull_margin.as_mut() {
+            clamp(margin, 0.0, MAX_CULL_MARGIN, "cullMargin");
         }
 
         // Reported once for the whole list: field names are static strings,
@@ -370,6 +385,7 @@ impl Default for ParticleFxConfig {
             spin_direction: SpinDirection::Fixed,
             lifetime_min: 30.0,
             lifetime_max: 60.0,
+            cull_margin: None,
             start_size: 4.0,
             peak_size: 6.0,
             end_size: 0.0,
@@ -391,6 +407,45 @@ impl Default for ParticleFxConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cull_margin_defaults_to_off_when_absent() {
+        let mut value = serde_json::to_value(ParticleFxConfig::default()).unwrap();
+        value.as_object_mut().unwrap().remove("cullMargin");
+        let config: ParticleFxConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(config.cull_margin, None);
+    }
+
+    #[test]
+    fn cull_margin_round_trips_as_camel_case() {
+        let mut config = ParticleFxConfig::default();
+        config.cull_margin = Some(40.0);
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["cullMargin"], 40.0);
+        let back: ParticleFxConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(back.cull_margin, Some(40.0));
+    }
+
+    #[test]
+    fn a_negative_cull_margin_is_raised_to_zero_and_reported() {
+        let mut config = ParticleFxConfig::default();
+        config.cull_margin = Some(-5.0);
+        let changed = config.clamp_to_bounds();
+        assert_eq!(config.cull_margin, Some(0.0));
+        assert!(changed.contains(&"cullMargin"));
+    }
+
+    #[test]
+    fn an_absurd_cull_margin_is_capped_and_an_absent_one_is_left_alone() {
+        let mut config = ParticleFxConfig::default();
+        config.cull_margin = Some(1.0e9);
+        assert!(config.clamp_to_bounds().contains(&"cullMargin"));
+        assert_eq!(config.cull_margin, Some(10_000.0));
+
+        let mut config = ParticleFxConfig::default();
+        assert!(!config.clamp_to_bounds().contains(&"cullMargin"));
+        assert_eq!(config.cull_margin, None);
+    }
 
     #[test]
     fn every_shape_is_in_all_once() {
@@ -482,6 +537,7 @@ mod tests {
             spin_direction: SpinDirection::Fixed,
             lifetime_min: 30.0,
             lifetime_max: 60.0,
+            cull_margin: None,
             start_size: 4.0,
             peak_size: 6.0,
             end_size: 0.0,
