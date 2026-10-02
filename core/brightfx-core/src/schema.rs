@@ -171,8 +171,9 @@ pub struct EmitterTrigger {
 /// ceiling only when `seek` silently stops short of them.
 pub const MAX_EMITTER_TRACK_DURATION: f32 = 600.0;
 
-/// Upper bound on `cullMargin`, in logical px. Far past any real frame, so
-/// it only stops an absurd value from overflowing the comparison.
+/// Upper bound on `cullMargin`, in logical px. A sanity limit, well past any
+/// real frame (`MAX_VIEWPORT_SIDE` is 8192 device px), not a numeric one: an
+/// emitter farther outside the frame than this would be culled on entry.
 const MAX_CULL_MARGIN: f32 = 10_000.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
