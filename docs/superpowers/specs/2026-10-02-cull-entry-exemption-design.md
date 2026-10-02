@@ -22,10 +22,12 @@ rectangle once.
 
 - `Particle` (crate-private, `particle.rs`) gets `entered: bool`, false at
   spawn.
-- In `step`, after the position update, when both `cullMargin` and bounds are
-  set: a particle inside `[-m, w + m] x [-m, h + m]` sets `entered = true` and
-  is kept. A particle outside that rectangle is culled if `entered` is
-  already true, and kept if not.
+- In `step`, when both `cullMargin` and bounds are set, a particle that is
+  inside `[-m, w + m] x [-m, h + m]` sets `entered = true`. This is checked
+  twice per step: before the position update (so the spawn position counts,
+  and a particle that spawns inside and leaves in its first step is still
+  culled) and after it. After the update, a particle outside the rectangle is
+  culled if `entered` is already true, and kept if not.
 - A particle whose position is not finite (NaN or infinite) is culled
   unconditionally, entered or not. It cannot be on screen, and without this
   rule the entry exemption would keep a NaN particle for its whole lifetime,
@@ -86,11 +88,17 @@ All in `simulation.rs` unit tests, using the existing runner helpers:
   lifetime ends.
 - A particle that spawns inside the margin zone but outside the frame, and
   drifts out past the margin, is culled (it counts as entered at spawn).
-- A particle that spawns inside the bounds is culled after leaving, as
-  before (the existing culling tests still pass unchanged).
+- A particle that spawns inside the bounds and leaves in its first step is
+  culled (the spawn position counts as inside). This is the test that fails
+  if the pre-update check is removed.
+- The other culling tests pass unchanged, except
+  `culling_removes_some_but_not_all_of_a_burst`: its range check on every
+  surviving particle encoded the old behavior (particles spawned just above
+  the top edge are now kept until they enter). It now asserts the rule as an
+  invariant: no particle that has entered survives outside the rectangle.
 - Seek determinism with an off-screen emitter: fresh, rewound and
-  forward-stepped seeks give identical buffers, with a non-vacuity guard that
-  particles survive.
+  forward-stepped seeks give identical buffers, with non-vacuity guards that
+  some particles entered and some never did.
 - The existing NaN test
   (`a_particle_with_a_non_finite_position_is_culled`) still passes unchanged:
   its NaN particle never enters, and is culled because non-finite positions
