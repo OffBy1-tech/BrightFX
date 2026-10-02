@@ -21,7 +21,7 @@ const burstOnceEffect = withTriggers(shared.burstOnceTriggers);
 // write rather than React state: the sim loads asynchronously and
 // re-renders only the component, so a sibling reading a counter would miss
 // it. Compositions without the markers are unaffected.
-const PROBE_METHODS = { raster: ["render", "frame"], seek: ["seek"] } as const;
+const PROBE_METHODS = { raster: ["render", "frame"], seek: ["seek"], bounds: ["setBounds"] } as const;
 for (const [probe, methods] of Object.entries(PROBE_METHODS)) {
   for (const method of methods) {
     const proto = Simulation.prototype as unknown as Record<string, (...args: unknown[]) => unknown>;
@@ -72,6 +72,19 @@ const SpriteModeTest: React.FC = () => (
   />
 );
 
+const SpriteBoundsTest: React.FC = () => (
+  <>
+    <BrightFX
+      effect={effect}
+      seed={42}
+      mode="sprite"
+      wasmSrc={WASM}
+      render={() => <div style={{ width: 4, height: 4, background: "#ff0000" }} />}
+    />
+    <Probes />
+  </>
+);
+
 const EmptyFrameTest: React.FC = () => (
   <>
     <BrightFX effect={lateEffect} seed={42} mode="frame" wasmSrc={WASM} />
@@ -111,6 +124,7 @@ export const Root: React.FC = () => (
   <>
     <Composition id="FrameModeTest" component={FrameModeTest} durationInFrames={60} {...size} />
     <Composition id="SpriteModeTest" component={SpriteModeTest} durationInFrames={60} {...size} />
+    <Composition id="SpriteBoundsTest" component={SpriteBoundsTest} durationInFrames={60} {...size} />
     <Composition id="EmptyFrameTest" component={EmptyFrameTest} durationInFrames={60} {...size} />
     <Composition id="PastTrackEndTest" component={PastTrackEndTest} durationInFrames={90} {...size} />
     <Composition id="BurstRangeTest" component={BurstRangeTest} durationInFrames={60} {...size} />
