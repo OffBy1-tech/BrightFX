@@ -232,6 +232,13 @@ impl AbiSimulation {
         self.guard_mut(|sim| sim.set_emitter(x, y, vx, vy, active));
     }
 
+    /// Sets the logical-unit rectangle `cullMargin` is measured from, for
+    /// a host with no viewport (sprite mode). `set_viewport` sets it itself.
+    /// See `Simulation::set_bounds`.
+    pub fn set_bounds(&mut self, width: f32, height: f32) {
+        self.guard_mut(|sim| sim.set_bounds(width, height));
+    }
+
     pub fn trigger_burst(&mut self) {
         self.guard_mut(|sim| sim.trigger_burst());
     }
@@ -297,10 +304,21 @@ impl AbiSimulation {
     ///
     /// Reallocates the frame, so on WASM a host must re-read `frame_ptr`
     /// afterwards, as with `set_config` and the particle buffer.
+    ///
+    /// Also gives the simulation its bounds, `width / scale` by
+    /// `height / scale` logical units, so `cullMargin` works with no further
+    /// call. A rejected viewport leaves the bounds as they were.
     #[cfg(feature = "render")]
     pub fn set_viewport(&mut self, width: u32, height: u32, scale: f32) -> String {
-        self.guard_render(|_, renderer| match renderer.set_viewport(width, height, scale) {
-            Ok(clamped) => ok_envelope(&clamped),
+        self.poisoning(|this| match this.renderer.set_viewport(width, height, scale) {
+            Ok(clamped) => {
+                // The renderer clamps width, height and scale, so read back
+                // what it holds rather than the arguments.
+                if let Some(vp) = this.renderer.viewport() {
+                    this.sim.set_bounds(vp.width as f32 / vp.scale, vp.height as f32 / vp.scale);
+                }
+                ok_envelope(&clamped)
+            }
             Err(message) => err_envelope(message),
         })
         .unwrap_or_else(|| err_envelope(POISONED_MESSAGE))
@@ -835,6 +853,37 @@ mod tests {
             let value = parse(&sim.set_viewport(64, 48, 100.0));
             assert_eq!(value["ok"], true);
             assert_eq!(value["clamped"][0], "viewport.scale");
+        }
+
+        #[test]
+        fn set_viewport_feeds_the_bounds_in_logical_units() {
+            let mut sim = AbiSimulation::new(1);
+            sim.set_viewport(200, 100, 2.0);
+            assert_eq!(sim.sim.bounds(), Some((100.0, 50.0)));
+        }
+
+        #[test]
+        fn the_bounds_follow_the_clamped_scale() {
+            let mut sim = AbiSimulation::new(1);
+            // 100.0 clamps to MAX_SCALE (8.0).
+            sim.set_viewport(80, 40, 100.0);
+            assert_eq!(sim.sim.bounds(), Some((10.0, 5.0)));
+        }
+
+        #[test]
+        fn a_rejected_viewport_leaves_the_bounds_alone() {
+            let mut sim = AbiSimulation::new(1);
+            sim.set_viewport(80, 40, 1.0);
+            sim.set_viewport(0, 40, 1.0);
+            assert_eq!(sim.sim.bounds(), Some((80.0, 40.0)));
+        }
+
+        #[test]
+        fn set_bounds_sets_them_without_a_viewport() {
+            let mut sim = AbiSimulation::new(1);
+            sim.set_bounds(320.0, 180.0);
+            assert_eq!(sim.sim.bounds(), Some((320.0, 180.0)));
+            assert_eq!(sim.frame_len(), 0, "set_bounds must not allocate a frame");
         }
 
         #[test]
