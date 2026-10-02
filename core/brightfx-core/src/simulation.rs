@@ -476,7 +476,10 @@ impl Simulation {
             p.x += p.vx * fe;
             p.y += p.vy * fe;
             if let Some((margin, w, h)) = cull {
-                if p.x < -margin || p.x > w + margin || p.y < -margin || p.y > h + margin {
+                // Written as "not inside" so a NaN position, for which every
+                // comparison is false, is culled rather than kept forever.
+                let inside = p.x >= -margin && p.x <= w + margin && p.y >= -margin && p.y <= h + margin;
+                if !inside {
                     return false;
                 }
             }
@@ -1864,6 +1867,29 @@ mod tests {
             sim.advance(TICK);
         }
         assert_eq!(sim.particle_count(), 1);
+    }
+
+    /// An infinite speed range makes `Rng::range` return NaN (inf + 0 * (inf - inf)),
+    /// so the spawned particle's position is NaN after its first step.
+    fn nan_runner(margin: Option<f32>) -> Simulation {
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 1.0;
+        config.initial_speed_min = f32::INFINITY;
+        config.initial_speed_max = f32::INFINITY;
+        config.cull_margin = margin;
+        let mut sim = Simulation::new(config, 7);
+        sim.set_bounds(100.0, 100.0);
+        sim.set_emitter(50.0, 50.0, 0.0, 0.0, true);
+        sim.advance(TICK);
+        sim
+    }
+
+    #[test]
+    fn a_particle_with_a_non_finite_position_is_culled() {
+        // Without a margin the NaN particle lives, so this cannot pass
+        // because nothing spawned.
+        assert_eq!(nan_runner(None).particle_count(), 1, "test is vacuous without the NaN particle");
+        assert_eq!(nan_runner(Some(5.0)).particle_count(), 0, "a NaN position was kept");
     }
 
     #[test]
