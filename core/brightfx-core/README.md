@@ -160,6 +160,12 @@ cover how far outside the bounds the emitter sits (plus up to 2 px of spawn
 jitter and one step of travel): a particle that starts beyond the margin is
 culled on its first step, before it is drawn.
 
+`set_bounds` takes logical px; a non-finite or non-positive size clears the
+bounds. The C API has no `bfx_set_bounds`, so a C host gets bounds only through
+`bfx_set_viewport`, and `cullMargin` is inert for a C host that never sets a
+viewport. If a host calls both `set_viewport` and `set_bounds`, the last call
+wins.
+
 ## Color modes
 
 `ColorMode::MultiPalette` samples `color_stops` across each particle's
