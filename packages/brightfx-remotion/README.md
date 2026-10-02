@@ -88,7 +88,8 @@ against. Sprite mode gives it the full composition size automatically, and the
 bounds stay the full composition size even when `<BrightFX>` is placed in a
 sub-region container. The exported hook takes an optional last argument for
 this: `useBrightFX(effect, seed, wasmSrc, viewport, bounds = null)`, where
-`bounds` is `{ width, height }` in logical px.
+`bounds` is `{ width, height }` in logical px. It is ignored when a `viewport`
+is given, since a viewport sets the bounds itself.
 
 ## Empty frames
 

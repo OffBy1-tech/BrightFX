@@ -60,7 +60,8 @@ export interface BrightFXProps {
  *
  *  `viewport` allocates a frame (frame mode). `bounds` is for a host that
  *  draws its own sprites: it gives the simulation a size for `cullMargin`
- *  without allocating a frame. A viewport sets the bounds itself.
+ *  without allocating a frame. A viewport sets the bounds itself, so
+ *  `bounds` is ignored when a `viewport` is given.
  *
  *  Returns null until a simulation built for exactly this `viewport` and
  *  `bounds` has loaded. When either changes (a sprite/frame mode switch, or a new
@@ -119,8 +120,9 @@ export function useBrightFX(
         if (viewportWidth > 0 && viewportHeight > 0) {
           const v = created.setViewport(viewportWidth, viewportHeight, 1);
           if (!v.ok) throw new Error(`BrightFX viewport rejected: ${v.error}`);
-        }
-        if (boundsWidth > 0 && boundsHeight > 0) {
+        } else if (boundsWidth > 0 && boundsHeight > 0) {
+          // Only without a viewport: a viewport already set the bounds, and
+          // `setBounds` after it would replace them with a different size.
           created.setBounds(boundsWidth, boundsHeight);
         }
         setLoaded({ sim: created, width: viewportWidth, height: viewportHeight, boundsWidth, boundsHeight });
