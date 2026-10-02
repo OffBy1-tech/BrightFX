@@ -221,7 +221,10 @@ export class Simulation {
   /** The logical-pixel size `cullMargin` is measured from, for a host that
    *  draws its own sprites and never calls `setViewport` (which sets it
    *  itself, as `width / scale` by `height / scale`). Changing it makes the
-   *  next `seek` replay from zero. */
+   *  next `seek` replay from zero. A non-finite or non-positive size
+   *  (including `undefined`, which wasm-bindgen turns into NaN) clears the
+   *  bounds and so turns culling off. When a host calls both `setViewport`
+   *  and `setBounds`, the last call wins. */
   setBounds(width: number, height: number): void {
     this.sim.setBounds(width, height);
   }
