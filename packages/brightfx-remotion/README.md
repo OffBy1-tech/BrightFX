@@ -81,6 +81,16 @@ Sprite mode calls `render` once per particle instead:
 | `wasmSrc` | `string` | `staticFile(DEFAULT_WASM_PATH)` | Overrides where the wasm is fetched from. |
 | `style` | `CSSProperties` | — | Merged onto the wrapping `AbsoluteFill`. |
 
+## Culling bounds
+
+If the effect sets `cullMargin`, the simulation needs the frame size to cull
+against. Sprite mode gives it the full composition size automatically, and the
+bounds stay the full composition size even when `<BrightFX>` is placed in a
+sub-region container. The exported hook takes an optional last argument for
+this: `useBrightFX(effect, seed, wasmSrc, viewport, bounds = null)`, where
+`bounds` is `{ width, height }` in logical px. It is ignored when a `viewport`
+is given, since a viewport sets the bounds itself.
+
 ## Empty frames
 
 A frame with no particles costs a seek and nothing else: frame mode skips

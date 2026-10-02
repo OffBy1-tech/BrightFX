@@ -58,8 +58,13 @@ export interface BrightFXProps {
 /** One simulation per mounted component. Holds Remotion's render until the
  *  wasm has initialized and the config is loaded, then releases it.
  *
- *  Returns null until a simulation built for exactly this `viewport` has
- *  loaded. When the viewport changes (a sprite/frame mode switch, or a new
+ *  `viewport` allocates a frame (frame mode). `bounds` is for a host that
+ *  draws its own sprites: it gives the simulation a size for `cullMargin`
+ *  without allocating a frame. A viewport sets the bounds itself, so
+ *  `bounds` is ignored when a `viewport` is given.
+ *
+ *  Returns null until a simulation built for exactly this `viewport` and
+ *  `bounds` has loaded. When either changes (a sprite/frame mode switch, or a new
  *  composition size), the render that sees the change still holds the old
  *  simulation -- the effect that replaces it runs after that render -- and
  *  drawing with it would rasterize the wrong size, or 0x0 for a sprite-mode
@@ -70,11 +75,20 @@ export function useBrightFX(
   seed: number,
   wasmSrc: string,
   viewport: { width: number; height: number } | null,
+  bounds: { width: number; height: number } | null = null,
 ): Simulation | null {
-  const [loaded, setLoaded] = useState<{ sim: Simulation; width: number; height: number } | null>(null);
+  const [loaded, setLoaded] = useState<{
+    sim: Simulation;
+    width: number;
+    height: number;
+    boundsWidth: number;
+    boundsHeight: number;
+  } | null>(null);
   const effectJson = useMemo(() => JSON.stringify(effect), [effect]);
   const viewportWidth = viewport?.width ?? 0;
   const viewportHeight = viewport?.height ?? 0;
+  const boundsWidth = bounds?.width ?? 0;
+  const boundsHeight = bounds?.height ?? 0;
 
   useEffect(() => {
     const handle = delayRender("BrightFX: loading wasm and config");
@@ -106,8 +120,12 @@ export function useBrightFX(
         if (viewportWidth > 0 && viewportHeight > 0) {
           const v = created.setViewport(viewportWidth, viewportHeight, 1);
           if (!v.ok) throw new Error(`BrightFX viewport rejected: ${v.error}`);
+        } else if (boundsWidth > 0 && boundsHeight > 0) {
+          // Only without a viewport: a viewport already set the bounds, and
+          // `setBounds` after it would replace them with a different size.
+          created.setBounds(boundsWidth, boundsHeight);
         }
-        setLoaded({ sim: created, width: viewportWidth, height: viewportHeight });
+        setLoaded({ sim: created, width: viewportWidth, height: viewportHeight, boundsWidth, boundsHeight });
         release();
       })
       .catch((error: unknown) => cancelRender(error));
@@ -118,9 +136,15 @@ export function useBrightFX(
       created?.dispose();
       setLoaded(null);
     };
-  }, [effectJson, seed, wasmSrc, viewportWidth, viewportHeight]);
+  }, [effectJson, seed, wasmSrc, viewportWidth, viewportHeight, boundsWidth, boundsHeight]);
 
-  return loaded && loaded.width === viewportWidth && loaded.height === viewportHeight ? loaded.sim : null;
+  return loaded &&
+    loaded.width === viewportWidth &&
+    loaded.height === viewportHeight &&
+    loaded.boundsWidth === boundsWidth &&
+    loaded.boundsHeight === boundsHeight
+    ? loaded.sim
+    : null;
 }
 
 export const BrightFX: React.FC<BrightFXProps> = ({
@@ -136,7 +160,13 @@ export const BrightFX: React.FC<BrightFXProps> = ({
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const src = wasmSrc ?? staticFile(DEFAULT_WASM_PATH);
-  const sim = useBrightFX(effect, seed, src, mode === "frame" ? { width, height } : null);
+  const sim = useBrightFX(
+    effect,
+    seed,
+    src,
+    mode === "frame" ? { width, height } : null,
+    mode === "sprite" ? { width, height } : null,
+  );
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const time = frame / fps;

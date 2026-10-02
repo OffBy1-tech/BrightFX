@@ -232,6 +232,13 @@ impl AbiSimulation {
         self.guard_mut(|sim| sim.set_emitter(x, y, vx, vy, active));
     }
 
+    /// Sets the logical-unit rectangle `cullMargin` is measured from, for
+    /// a host with no viewport (sprite mode). `set_viewport` sets it itself.
+    /// See `Simulation::set_bounds`.
+    pub fn set_bounds(&mut self, width: f32, height: f32) {
+        self.guard_mut(|sim| sim.set_bounds(width, height));
+    }
+
     pub fn trigger_burst(&mut self) {
         self.guard_mut(|sim| sim.trigger_burst());
     }
@@ -297,10 +304,21 @@ impl AbiSimulation {
     ///
     /// Reallocates the frame, so on WASM a host must re-read `frame_ptr`
     /// afterwards, as with `set_config` and the particle buffer.
+    ///
+    /// Also gives the simulation its bounds, `width / scale` by
+    /// `height / scale` logical units, so `cullMargin` works with no further
+    /// call. A rejected viewport leaves the bounds as they were.
     #[cfg(feature = "render")]
     pub fn set_viewport(&mut self, width: u32, height: u32, scale: f32) -> String {
-        self.guard_render(|_, renderer| match renderer.set_viewport(width, height, scale) {
-            Ok(clamped) => ok_envelope(&clamped),
+        self.poisoning(|this| match this.renderer.set_viewport(width, height, scale) {
+            Ok(clamped) => {
+                // The renderer clamps width, height and scale, so read back
+                // what it holds rather than the arguments.
+                if let Some(vp) = this.renderer.viewport() {
+                    this.sim.set_bounds(vp.width as f32 / vp.scale, vp.height as f32 / vp.scale);
+                }
+                ok_envelope(&clamped)
+            }
             Err(message) => err_envelope(message),
         })
         .unwrap_or_else(|| err_envelope(POISONED_MESSAGE))
@@ -366,7 +384,7 @@ const POISONED_MESSAGE: &str = "simulation is poisoned by a panic; create a new 
 /// Brings a supported older config forward to `SCHEMA_VERSION`, one
 /// version at a time. This is where each future step slots in.
 fn migrate(value: &mut serde_json::Value, from: u64) {
-    // 1 -> 2 -> 3 only added vocabulary (and a defaulted field): the body
+    // 1 -> 2 -> 3 -> 4 only added vocabulary (and defaulted fields): the body
     // is already valid.
     if from < SCHEMA_VERSION as u64 {
         value["schemaVersion"] = serde_json::json!(SCHEMA_VERSION);
@@ -392,8 +410,8 @@ mod tests {
         let err = parse_config("{ not json").unwrap_err();
         assert!(err.starts_with("invalid JSON"), "got: {err}");
 
-        let err = parse_config(r#"{"schemaVersion": 4, "somethingEntirelyNew": true}"#).unwrap_err();
-        assert!(err.contains("unsupported schemaVersion 4"), "got: {err}");
+        let err = parse_config(r#"{"schemaVersion": 5, "somethingEntirelyNew": true}"#).unwrap_err();
+        assert!(err.contains("unsupported schemaVersion 5"), "got: {err}");
 
         let err = parse_config(r#"{"glowRadius": 1}"#).unwrap_err();
         assert_eq!(err, "missing or non-numeric schemaVersion");
@@ -526,7 +544,7 @@ mod tests {
     fn the_version_is_checked_before_the_body_is_deserialized() {
         // A future config whose body today's struct cannot parse must still
         // produce the version error, not a confusing serde error.
-        let json = r#"{"schemaVersion": 4, "somethingEntirelyNew": true}"#;
+        let json = r#"{"schemaVersion": 5, "somethingEntirelyNew": true}"#;
         let mut sim = AbiSimulation::new(42);
 
         let result = parse(&sim.set_config(json));
@@ -537,17 +555,19 @@ mod tests {
 
     #[test]
     fn older_versions_still_load_and_read_back_as_the_current_version() {
-        // v2 and v3 only added vocabulary (random-palette; capsule and
-        // spinDirection), so an older body is a valid current body once
-        // relabelled -- spinDirection defaults when it is absent.
-        for version in [1u64, 2] {
+        // v2, v3 and v4 only added vocabulary and defaulted fields, so an
+        // older body is a valid current body once relabelled --
+        // spinDirection and cullMargin default when absent.
+        for version in [1u64, 2, 3] {
             let mut value = serde_json::to_value(ParticleFxConfig::default()).unwrap();
             value["schemaVersion"] = serde_json::json!(version);
             value.as_object_mut().unwrap().remove("spinDirection");
+            value.as_object_mut().unwrap().remove("cullMargin");
 
             let config = parse_config(&value.to_string()).unwrap();
             assert_eq!(config.schema_version, SCHEMA_VERSION, "v{version}");
             assert_eq!(config.spin_direction, crate::schema::SpinDirection::Fixed, "v{version}");
+            assert_eq!(config.cull_margin, None, "v{version}");
 
             let mut sim = AbiSimulation::new(42);
             assert_eq!(parse(&sim.set_config(&value.to_string()))["ok"], true, "v{version}");
@@ -555,20 +575,20 @@ mod tests {
     }
 
     #[test]
-    fn the_current_version_is_3_and_loads() {
-        assert_eq!(SCHEMA_VERSION, 3);
+    fn the_current_version_is_4_and_loads() {
+        assert_eq!(SCHEMA_VERSION, 4);
         let json = serde_json::to_string(&ParticleFxConfig::default()).unwrap();
-        assert_eq!(parse_config(&json).unwrap().schema_version, 3);
+        assert_eq!(parse_config(&json).unwrap().schema_version, 4);
     }
 
     #[test]
     fn versions_outside_the_supported_range_are_rejected_clearly() {
-        for version in [0u64, 4] {
+        for version in [0u64, 5] {
             let mut value = serde_json::to_value(ParticleFxConfig::default()).unwrap();
             value["schemaVersion"] = serde_json::json!(version);
             let message = parse_config(&value.to_string()).unwrap_err();
             assert!(message.contains(&format!("unsupported schemaVersion {version}")), "got: {message}");
-            assert!(message.contains("1-3"), "message must name the supported range: {message}");
+            assert!(message.contains("1-4"), "message must name the supported range: {message}");
         }
     }
 
@@ -833,6 +853,37 @@ mod tests {
             let value = parse(&sim.set_viewport(64, 48, 100.0));
             assert_eq!(value["ok"], true);
             assert_eq!(value["clamped"][0], "viewport.scale");
+        }
+
+        #[test]
+        fn set_viewport_feeds_the_bounds_in_logical_units() {
+            let mut sim = AbiSimulation::new(1);
+            sim.set_viewport(200, 100, 2.0);
+            assert_eq!(sim.sim.bounds(), Some((100.0, 50.0)));
+        }
+
+        #[test]
+        fn the_bounds_follow_the_clamped_scale() {
+            let mut sim = AbiSimulation::new(1);
+            // 100.0 clamps to MAX_SCALE (8.0).
+            sim.set_viewport(80, 40, 100.0);
+            assert_eq!(sim.sim.bounds(), Some((10.0, 5.0)));
+        }
+
+        #[test]
+        fn a_rejected_viewport_leaves_the_bounds_alone() {
+            let mut sim = AbiSimulation::new(1);
+            sim.set_viewport(80, 40, 1.0);
+            sim.set_viewport(0, 40, 1.0);
+            assert_eq!(sim.sim.bounds(), Some((80.0, 40.0)));
+        }
+
+        #[test]
+        fn set_bounds_sets_them_without_a_viewport() {
+            let mut sim = AbiSimulation::new(1);
+            sim.set_bounds(320.0, 180.0);
+            assert_eq!(sim.sim.bounds(), Some((320.0, 180.0)));
+            assert_eq!(sim.frame_len(), 0, "set_bounds must not allocate a frame");
         }
 
         #[test]

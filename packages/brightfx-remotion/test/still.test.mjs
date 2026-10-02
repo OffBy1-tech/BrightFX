@@ -189,3 +189,14 @@ test("switching from sprite to frame mode mid-render draws the frame-mode frame"
     assert.ok(differing <= DIFF_BUDGET, `frame ${f}: ${differing} pixels differ beyond tolerance`);
   }
 });
+
+test("sprite mode gives the simulation the composition's bounds", () => {
+  const png = still("SpriteBoundsTest");
+  assert.ok(probeShown(png, "bounds"), "setBounds never ran in sprite mode, so cullMargin has nothing to cull against");
+});
+
+test("frame mode leaves the bounds to setViewport", () => {
+  const png = still("FrameModeTest");
+  assert.ok(probeShown(png, "raster"), "the frame never rasterized, so this proves nothing");
+  assert.ok(!probeShown(png, "bounds"), "setBounds ran in frame mode, where setViewport already sets the bounds");
+});
