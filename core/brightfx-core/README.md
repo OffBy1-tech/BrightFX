@@ -145,6 +145,18 @@ field re-lays out the whole effect, as changing any motion field does,
 while `"fixed"` configs keep exactly the random sequence they had before
 the field existed.
 
+## Culling
+
+`cullMargin` (schema version 4; omitted or `null` means off) removes a
+particle once its center is more than that many logical px outside the
+simulation's bounds, so an edge-spawned effect need not keep a lifetime long
+enough to cross every aspect ratio. The bounds come from `set_viewport`
+(`width / scale` by `height / scale`) or, for a host with no viewport such as
+sprite mode, from `set_bounds` (`setBounds` in JS and WASM; Remotion's sprite
+mode passes its composition size automatically). Without bounds nothing is
+culled. Culling is permanent: a particle that leaves and would fall back in
+is gone, so pick a margin that covers its excursion.
+
 ## Color modes
 
 `ColorMode::MultiPalette` samples `color_stops` across each particle's
