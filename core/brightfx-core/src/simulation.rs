@@ -144,6 +144,11 @@ pub struct Simulation {
     /// `seek` replays from zero. Only `seek` sets it; everything else
     /// clears it through `leave_baked`.
     baked: Option<u32>,
+    /// Logical-pixel size of the rectangle `[0, w] x [0, h]` that
+    /// `config.cull_margin` is measured from. `None` until the host sets
+    /// it, and while it is `None` nothing is culled. Part of the state a
+    /// replay depends on, so changing it clears `baked` (see `set_bounds`).
+    bounds: Option<(f32, f32)>,
 }
 
 impl Simulation {
@@ -170,6 +175,7 @@ impl Simulation {
             // this Vec never reallocates.
             buffer: Vec::with_capacity(MAX_PARTICLES),
             baked: None,
+            bounds: None,
         }
     }
 
@@ -180,6 +186,31 @@ impl Simulation {
         // Live particles keep their state (that is the boundary's contract),
         // but the track may have changed, so the next seek replays.
         self.leave_baked();
+    }
+
+    /// Sets the logical-pixel rectangle `[0, width] x [0, height]` that
+    /// `cullMargin` is measured from. A non-finite or non-positive
+    /// dimension clears it, and with no bounds nothing is culled.
+    ///
+    /// The ABI's `set_viewport` calls this itself. A host with no viewport
+    /// (sprite mode) calls it with its container size.
+    ///
+    /// A change clears the baked position: culling makes the pool depend
+    /// on the bounds, so the next `seek` must replay from zero rather than
+    /// step forward from a pool built for another size. Setting the bounds
+    /// the simulation already has changes nothing and leaves it alone.
+    pub fn set_bounds(&mut self, width: f32, height: f32) {
+        let valid = width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0;
+        let bounds = valid.then_some((width, height));
+        if bounds != self.bounds {
+            self.bounds = bounds;
+            self.leave_baked();
+        }
+    }
+
+    /// The bounds `set_bounds` last accepted, in logical px.
+    pub fn bounds(&self) -> Option<(f32, f32)> {
+        self.bounds
     }
 
     /// Sets the emitter's position, velocity, and active state.
@@ -403,6 +434,12 @@ impl Simulation {
         let emitter_y = self.emitter_y;
         let size_curve = self.config.size_curve;
 
+        // Only culls when the author asked for it and the host said how big
+        // the frame is.
+        let cull = match (self.config.cull_margin, self.bounds) {
+            (Some(margin), Some((w, h))) => Some((margin, w, h)),
+            _ => None,
+        };
         self.pool.retain_mut(|p| {
             p.life += fe;
             if p.life >= p.max_life {
@@ -438,6 +475,11 @@ impl Simulation {
 
             p.x += p.vx * fe;
             p.y += p.vy * fe;
+            if let Some((margin, w, h)) = cull {
+                if p.x < -margin || p.x > w + margin || p.y < -margin || p.y > h + margin {
+                    return false;
+                }
+            }
             p.rotation += p.rotation_speed * fe;
 
             let progress = if p.max_life > 0.0 { p.life / p.max_life } else { 1.0 };
@@ -1738,5 +1780,158 @@ mod tests {
 
         assert!(sim.particle_count() > 0, "test is vacuous with no particles");
         assert_eq!(sim.buffer().as_ptr(), original, "buffer reallocated mid-run");
+    }
+
+    /// One particle moving +x at 10 px per step from about (50, 50): spawned
+    /// by the first advance, after which the emitter goes quiet.
+    fn one_runner(margin: Option<f32>) -> Simulation {
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 1.0;
+        config.initial_speed_min = 10.0;
+        config.initial_speed_max = 10.0;
+        config.cull_margin = margin;
+        let mut sim = Simulation::new(config, 7);
+        sim.set_emitter(50.0, 50.0, 0.0, 0.0, true);
+        sim.advance(TICK);
+        sim.set_emitter(50.0, 50.0, 0.0, 0.0, false);
+        assert_eq!(sim.particle_count(), 1, "test is vacuous without the runner");
+        sim
+    }
+
+    #[test]
+    fn a_particle_past_the_margin_is_culled_and_one_inside_it_is_kept() {
+        let mut sim = one_runner(Some(5.0));
+        sim.set_bounds(100.0, 100.0);
+        // x is 60 +/- 2 after the spawn step; four more steps put it at
+        // 100 +/- 2, inside the 105 edge.
+        for _ in 0..4 {
+            sim.advance(TICK);
+        }
+        assert_eq!(sim.particle_count(), 1, "culled while inside the margin");
+        // One more step puts it at 110 +/- 2, past 105.
+        sim.advance(TICK);
+        assert_eq!(sim.particle_count(), 0, "kept past the margin");
+    }
+
+    #[test]
+    fn every_edge_culls() {
+        // Moves the runner along each axis by rotating the emission angle.
+        for (angle, label) in [(0.0, "right"), (90.0, "down"), (180.0, "left"), (270.0, "up")] {
+            let mut config = base_config();
+            config.emitter.spawn_rate_while_active = 1.0;
+            config.emitter.emission_angle = angle;
+            config.initial_speed_min = 10.0;
+            config.initial_speed_max = 10.0;
+            config.cull_margin = Some(0.0);
+            let mut sim = Simulation::new(config, 7);
+            sim.set_bounds(100.0, 100.0);
+            sim.set_emitter(50.0, 50.0, 0.0, 0.0, true);
+            sim.advance(TICK);
+            sim.set_emitter(50.0, 50.0, 0.0, 0.0, false);
+            assert_eq!(sim.particle_count(), 1, "{label}: vacuous");
+            for _ in 0..8 {
+                sim.advance(TICK);
+            }
+            assert_eq!(sim.particle_count(), 0, "{label}: never culled");
+        }
+    }
+
+    #[test]
+    fn nothing_is_culled_without_bounds() {
+        let mut sim = one_runner(Some(0.0));
+        for _ in 0..20 {
+            sim.advance(TICK);
+        }
+        assert_eq!(sim.particle_count(), 1);
+    }
+
+    #[test]
+    fn nothing_is_culled_without_a_margin() {
+        let mut sim = one_runner(None);
+        sim.set_bounds(100.0, 100.0);
+        for _ in 0..20 {
+            sim.advance(TICK);
+        }
+        assert_eq!(sim.particle_count(), 1);
+    }
+
+    #[test]
+    fn invalid_bounds_clear_the_bounds() {
+        let mut sim = Simulation::new(base_config(), 1);
+        sim.set_bounds(100.0, 50.0);
+        assert_eq!(sim.bounds(), Some((100.0, 50.0)));
+        for (w, h) in [(0.0, 50.0), (100.0, -1.0), (f32::NAN, 50.0), (100.0, f32::INFINITY)] {
+            sim.set_bounds(100.0, 50.0);
+            sim.set_bounds(w, h);
+            assert_eq!(sim.bounds(), None, "({w}, {h})");
+        }
+    }
+
+    #[test]
+    fn changing_the_bounds_clears_the_baked_position_but_repeating_them_does_not() {
+        let mut sim = Simulation::new(track_config(), 5);
+        sim.seek(0.5);
+        assert!(sim.baked.is_some());
+        sim.set_bounds(100.0, 100.0);
+        assert!(sim.baked.is_none(), "a new size left the cursor in place");
+
+        sim.seek(0.5);
+        assert!(sim.baked.is_some());
+        sim.set_bounds(100.0, 100.0);
+        assert!(sim.baked.is_some(), "identical bounds cleared the cursor");
+    }
+
+    /// The seek fixture's burst at 0.5 s: 12 radial particles from about
+    /// (30, 0), culled at the top edge when the bounds are set.
+    fn culling_track_config() -> ParticleFxConfig {
+        let mut config = track_config();
+        config.emitter.spawn_burst_size = 12;
+        config.initial_speed_min = 5.0;
+        config.initial_speed_max = 5.0;
+        config.cull_margin = Some(0.0);
+        config
+    }
+
+    fn xy(sim: &Simulation) -> Vec<(u32, u32)> {
+        sim.buffer().iter().map(|p| (p.x.to_bits(), p.y.to_bits())).collect()
+    }
+
+    #[test]
+    fn culling_removes_some_but_not_all_of_a_burst() {
+        let mut open = Simulation::new(culling_track_config(), 5);
+        open.seek(0.55);
+        let mut culled = Simulation::new(culling_track_config(), 5);
+        culled.set_bounds(200.0, 200.0);
+        culled.seek(0.55);
+
+        assert_eq!(open.particle_count(), 12, "test is vacuous without the burst");
+        assert!(culled.particle_count() > 0, "everything was culled");
+        assert!(culled.particle_count() < open.particle_count(), "nothing was culled");
+        assert!(culled.buffer().iter().all(|p| p.y >= 0.0 && p.x >= 0.0 && p.x <= 200.0));
+    }
+
+    #[test]
+    fn culling_is_deterministic_under_seek() {
+        let make = || {
+            let mut sim = Simulation::new(culling_track_config(), 5);
+            sim.set_bounds(200.0, 200.0);
+            sim
+        };
+        let mut fresh = make();
+        fresh.seek(0.55);
+
+        // Backward: overshoot, then seek back, which replays from zero.
+        let mut rewound = make();
+        rewound.seek(0.75);
+        rewound.seek(0.55);
+
+        // Forward: step on from an earlier seek.
+        let mut stepped = make();
+        stepped.seek(0.5);
+        stepped.seek(0.55);
+
+        assert!(fresh.particle_count() > 0, "test is vacuous with no particles");
+        assert_eq!(xy(&fresh), xy(&rewound));
+        assert_eq!(xy(&fresh), xy(&stepped));
     }
 }
