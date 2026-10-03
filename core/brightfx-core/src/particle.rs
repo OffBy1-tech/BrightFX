@@ -34,8 +34,9 @@ pub(crate) struct Particle {
     pub turbulence_seed: f32,
     /// Whether the particle has been inside the cull rectangle (bounds plus
     /// `cullMargin`) since it spawned. Only `Simulation::step` sets it, and
-    /// only while culling is active: a particle is exempt from the cull until
-    /// it has entered, so an emitter placed outside the frame still works.
+    /// only while culling is active. Once set, leaving the rectangle culls the
+    /// particle; until then it is culled only while moving away from it, so
+    /// an emitter placed outside the frame still works.
     pub entered: bool,
 }
 

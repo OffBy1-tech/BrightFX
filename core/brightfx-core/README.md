@@ -155,14 +155,15 @@ enough to cross every aspect ratio. The bounds come from `set_viewport`
 sprite mode, from `set_bounds` (`setBounds` in JS and WASM; Remotion's sprite
 mode passes its composition size automatically). Without bounds nothing is
 culled. Culling is permanent: a particle that leaves and would fall back in
-is gone, so pick a margin that covers its excursion. A particle is exempt
-from culling until it has been inside the cull rectangle (the bounds plus the
-margin) once, counting where it spawned, so an emitter outside the frame works
-with any margin, including 0. Two consequences: a particle that moves away
-from an outside emitter and never enters lives until its lifetime ends, and a
-particle that crosses the whole rectangle between two steps (only possible for
-frames a few pixels wide) is never seen inside and so is never culled. A
-particle whose position is not finite is always culled.
+is gone, so pick a margin that covers its excursion. A particle outside the
+cull rectangle (the bounds plus the margin) is kept while it has not yet been
+inside and is moving toward the rectangle, so an emitter outside the frame
+works with any margin, including 0. One that is outside and moving away is
+culled, entered or not, so particles that will never be seen do not fill the
+pool. That also means a particle that gravity or turbulence would bring back
+is culled early, if it had not entered yet. A particle that crosses the whole
+rectangle in a single step lands on the far side moving outward, so it is
+culled too. A particle whose position is not finite is always culled.
 
 `set_bounds` takes logical px; a non-finite or non-positive size clears the
 bounds. The C API has no `bfx_set_bounds`, so a C host gets bounds only through
