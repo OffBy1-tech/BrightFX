@@ -172,8 +172,7 @@ pub struct EmitterTrigger {
 pub const MAX_EMITTER_TRACK_DURATION: f32 = 600.0;
 
 /// Upper bound on `cullMargin`, in logical px. A sanity limit, well past any
-/// real frame (`MAX_VIEWPORT_SIDE` is 8192 device px), not a numeric one: an
-/// emitter farther outside the frame than this would be culled on entry.
+/// real frame (`MAX_VIEWPORT_SIDE` is 8192 device px), not a numeric one.
 const MAX_CULL_MARGIN: f32 = 10_000.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -238,8 +237,10 @@ pub struct ParticleFxConfig {
     pub lifetime_max: f32,
     /// Optional; schema version 3 and earlier omit it. Logical px. When set
     /// and the host has given the simulation bounds, a particle is removed
-    /// once its center is more than this far outside them. `None` never
-    /// culls.
+    /// once its center is more than this far outside them, after it has been
+    /// inside that area once. A particle outside the area that is moving away
+    /// from it is removed too, so an emitter placed off-screen works with any
+    /// margin. `None` never culls.
     #[serde(default)]
     pub cull_margin: Option<f32>,
     pub start_size: f32,

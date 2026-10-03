@@ -34,7 +34,9 @@ more than the margin outside the viewport. Lifetime then only has to be
   leaves the cursor alone.
 - In `step`'s `retain_mut`, after the position update, a particle is dropped
   when both `cull_margin` and `bounds` are set and its center is more than
-  `margin` outside `[0, w] x [0, h]`.
+  `margin` outside `[0, w] x [0, h]`, subject to the entry rule in
+  `2026-10-02-cull-entry-exemption-design.md` (a particle that has not yet
+  entered is kept unless it is moving away from the rectangle).
 - The test is a pure function of the particle's position, so it is
   deterministic under `seek`. Particle size is not added to the margin; the
   margin is the author's choice.
@@ -55,12 +57,12 @@ Culling is permanent. A particle that leaves and would later fall back in
 (confetti thrown upward past the top edge) is gone. The field is opt-in per
 preset, so authors can pick a large enough margin or leave it off.
 
-Entering is different from leaving. A particle is exempt from the cull until
-it has been inside the margin rectangle (bounds plus `cullMargin`) once, its
-spawn position included, so an emitter placed outside the frame works with any
-margin, including 0. See `2026-10-02-cull-entry-exemption-design.md`. The
-first version of this feature culled a particle that spawned beyond the margin
-on its first step, which made every off-screen emitter vanish.
+Entering is different from leaving. A particle outside the margin rectangle
+(bounds plus `cullMargin`) is kept while it is moving toward it and has not
+yet been inside, so an emitter placed outside the frame works with any margin,
+including 0. See `2026-10-02-cull-entry-exemption-design.md`. The first
+version of this feature culled a particle that spawned beyond the margin on
+its first step, which made every off-screen emitter vanish.
 
 ## Out of scope
 
