@@ -476,10 +476,19 @@ impl Simulation {
             p.x += p.vx * fe;
             p.y += p.vy * fe;
             if let Some((margin, w, h)) = cull {
-                // Written as "not inside" so a NaN position, for which every
-                // comparison is false, is culled rather than kept forever.
-                let inside = p.x >= -margin && p.x <= w + margin && p.y >= -margin && p.y <= h + margin;
-                if !inside {
+                // A position that is not finite cannot be on screen, entered
+                // or not. (It is also never "inside", so it would otherwise
+                // be exempt, as a particle that has not entered yet.)
+                if !p.x.is_finite() || !p.y.is_finite() {
+                    return false;
+                }
+                if within_margin(p.x, p.y, margin, w, h) {
+                    p.entered = true;
+                } else if p.entered || moving_away(p, margin, w, h) {
+                    // Outside, and either it was inside before or it is
+                    // heading away from the rectangle. One that is outside
+                    // but moving toward the rectangle is an emitter placed
+                    // off-screen, and is kept so it can enter.
                     return false;
                 }
             }
@@ -590,6 +599,7 @@ impl Simulation {
             rotation: self.rng.range(0.0, std::f32::consts::TAU),
             rotation_speed,
             turbulence_seed: self.rng.range(0.0, 100.0),
+            entered: false,
         };
 
         self.pool.spawn(particle);
@@ -638,6 +648,30 @@ impl Simulation {
             });
         }
     }
+}
+
+/// Whether `(x, y)` lies in the cull rectangle `[-margin, w + margin] x
+/// [-margin, h + margin]`. False for a NaN coordinate, since every
+/// comparison with NaN is false.
+fn within_margin(x: f32, y: f32, margin: f32, w: f32, h: f32) -> bool {
+    x >= -margin && x <= w + margin && y >= -margin && y <= h + margin
+}
+
+/// Whether a particle outside the cull rectangle is moving away from it: its
+/// velocity has a positive component along the offset from the rectangle's
+/// nearest point. False for a particle inside the rectangle or at rest.
+fn moving_away(p: &Particle, margin: f32, w: f32, h: f32) -> bool {
+    // Signed distance past the nearest edge on one axis, 0 when inside it.
+    let overshoot = |v: f32, size: f32| {
+        if v < -margin {
+            v + margin
+        } else if v > size + margin {
+            v - size - margin
+        } else {
+            0.0
+        }
+    };
+    overshoot(p.x, w) * p.vx + overshoot(p.y, h) * p.vy > 0.0
 }
 
 fn evaluate_size_curve(curve: crate::schema::SizeCurve, p: &Particle, progress: f32) -> f32 {
@@ -1816,25 +1850,132 @@ mod tests {
         assert_eq!(sim.particle_count(), 0, "kept past the margin");
     }
 
+    /// One particle from an emitter at (`x`, 50), moving along `angle`
+    /// (degrees) at `speed` px per step, spawned by the first advance, after
+    /// which the emitter is switched off. Bounds are 100x100.
+    /// `margin` of `None` turns culling off, which gives each test a control
+    /// run that proves the particle really spawned.
+    fn runner_from(x: f32, angle: f32, speed: f32, margin: Option<f32>) -> Simulation {
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 1.0;
+        config.emitter.emission_angle = angle;
+        config.initial_speed_min = speed;
+        config.initial_speed_max = speed;
+        config.cull_margin = margin;
+        let mut sim = Simulation::new(config, 7);
+        sim.set_bounds(100.0, 100.0);
+        sim.set_emitter(x, 50.0, 0.0, 0.0, true);
+        sim.advance(TICK);
+        sim.set_emitter(x, 50.0, 0.0, 0.0, false);
+        sim
+    }
+
+    fn advance_steps(sim: &mut Simulation, steps: usize) {
+        for _ in 0..steps {
+            sim.advance(TICK);
+        }
+    }
+
+    /// The cull rule as an invariant: after a step, a particle outside the
+    /// cull rectangle has not entered it and is not moving away from it.
+    fn assert_survivors_obey_the_cull_rule(sim: &Simulation, margin: f32, w: f32, h: f32) {
+        for p in sim.pool.iter() {
+            if !within_margin(p.x, p.y, margin, w, h) {
+                assert!(!p.entered, "an entered particle survived outside at ({}, {})", p.x, p.y);
+                assert!(!moving_away(p, margin, w, h), "a particle moving away survived at ({}, {})", p.x, p.y);
+            }
+        }
+    }
+
     #[test]
-    fn a_particle_that_spawns_beyond_the_margin_is_culled_on_its_first_step() {
-        // The emitter sits 50 px left of the bounds and the particle is
-        // spawned inside `step`, before the cull, so it never survives a
-        // step if the margin does not reach the emitter.
-        let spawn_outside = |margin: f32| {
+    fn a_particle_at_rest_outside_the_margin_is_kept() {
+        // 50 px left of the frame with a margin of 0 and no speed: it is
+        // neither inside nor moving away, so it stays.
+        let sim = runner_from(-50.0, 0.0, 0.0, Some(0.0));
+        assert_eq!(runner_from(-50.0, 0.0, 0.0, None).particle_count(), 1, "test is vacuous");
+        assert_eq!(sim.particle_count(), 1);
+        assert!(sim.pool.iter().all(|p| !p.entered));
+    }
+
+    #[test]
+    fn an_entered_particle_is_culled_when_it_leaves_again() {
+        // From x = -30 at +10 px per step, margin 0: outside on the way in
+        // (moving toward the frame, so kept), inside from about step 4, past
+        // x = 100 from about step 14.
+        let mut sim = runner_from(-30.0, 0.0, 10.0, Some(0.0));
+        assert_eq!(sim.particle_count(), 1, "culled on the way in");
+        advance_steps(&mut sim, 7); // step 8, x about 50
+        assert_eq!(sim.particle_count(), 1, "culled while crossing the frame");
+        assert!(sim.pool.iter().all(|p| p.entered), "never marked as entered");
+        advance_steps(&mut sim, 8); // step 16, x about 130
+        assert_eq!(sim.particle_count(), 0, "kept after leaving");
+    }
+
+    #[test]
+    fn a_particle_moving_away_from_an_outside_emitter_is_culled() {
+        // 30 px left of the frame, moving left: it never enters and never
+        // will, so it must not sit in the pool for its whole lifetime.
+        assert_eq!(runner_from(-30.0, 180.0, 10.0, None).particle_count(), 1, "test is vacuous");
+        assert_eq!(runner_from(-30.0, 180.0, 10.0, Some(0.0)).particle_count(), 0, "kept a particle moving away");
+    }
+
+    #[test]
+    fn a_particle_in_the_margin_zone_is_culled_once_it_leaves_the_margin() {
+        // 20 px left of the frame, inside a margin of 50, moving away.
+        let mut sim = runner_from(-20.0, 180.0, 10.0, Some(50.0));
+        assert_eq!(sim.particle_count(), 1, "culled while still inside the margin");
+        assert!(sim.pool.iter().all(|p| p.entered), "not marked as entered");
+        advance_steps(&mut sim, 7); // step 8, x about -100, past -50
+        assert_eq!(sim.particle_count(), 0, "kept past the margin");
+    }
+
+    #[test]
+    fn a_particle_that_leaves_the_frame_in_its_first_step_is_culled() {
+        // 15 px per step (the schema's speed ceiling) from x = 99 against a
+        // margin of 5: outside the rectangle after one step.
+        assert_eq!(runner_from(99.0, 0.0, 15.0, None).particle_count(), 1, "test is vacuous");
+        assert_eq!(runner_from(99.0, 0.0, 15.0, Some(5.0)).particle_count(), 0, "kept a particle that left");
+    }
+
+    #[test]
+    fn a_particle_that_skips_a_tiny_frame_in_one_step_is_culled() {
+        // A 4x4 frame and 15 px per step: from x = -5 the particle lands at
+        // about 10, past the far edge, without a step ever ending inside.
+        // It is outside and moving away, so it is culled all the same.
+        let count = |margin: Option<f32>| {
             let mut config = base_config();
             config.emitter.spawn_rate_while_active = 1.0;
-            config.initial_speed_min = 0.0;
-            config.initial_speed_max = 0.0;
-            config.cull_margin = Some(margin);
+            config.initial_speed_min = 15.0;
+            config.initial_speed_max = 15.0;
+            config.cull_margin = margin;
             let mut sim = Simulation::new(config, 7);
-            sim.set_bounds(100.0, 100.0);
-            sim.set_emitter(-50.0, 50.0, 0.0, 0.0, true);
+            sim.set_bounds(4.0, 4.0);
+            sim.set_emitter(-5.0, 2.0, 0.0, 0.0, true);
             sim.advance(TICK);
             sim.particle_count()
         };
-        assert_eq!(spawn_outside(60.0), 1, "test is vacuous: nothing spawned");
-        assert_eq!(spawn_outside(5.0), 0, "kept a particle spawned beyond the margin");
+        assert_eq!(count(None), 1, "test is vacuous");
+        assert_eq!(count(Some(0.0)), 0, "a particle that skipped the frame was kept");
+    }
+
+    #[test]
+    fn switching_culling_on_mid_run_culls_particles_already_outside() {
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 1.0;
+        config.initial_speed_min = 10.0;
+        config.initial_speed_max = 10.0;
+        let mut sim = Simulation::new(config.clone(), 7);
+        sim.set_bounds(100.0, 100.0);
+        sim.set_emitter(50.0, 50.0, 0.0, 0.0, true);
+        sim.advance(TICK);
+        sim.set_emitter(50.0, 50.0, 0.0, 0.0, false);
+        advance_steps(&mut sim, 29); // x about 350, long gone from the frame
+        assert_eq!(sim.particle_count(), 1, "test is vacuous: culling was never off");
+
+        config.cull_margin = Some(0.0);
+        sim.set_config(config);
+        sim.advance(TICK);
+        assert_eq!(sim.particle_count(), 0, "a particle already outside survived");
     }
 
     #[test]
@@ -1954,7 +2095,7 @@ mod tests {
         assert_eq!(open.particle_count(), 12, "test is vacuous without the burst");
         assert!(culled.particle_count() > 0, "everything was culled");
         assert!(culled.particle_count() < open.particle_count(), "nothing was culled");
-        assert!(culled.buffer().iter().all(|p| p.y >= 0.0 && p.x >= 0.0 && p.x <= 200.0));
+        assert_survivors_obey_the_cull_rule(&culled, 0.0, 200.0, 200.0);
     }
 
     #[test]
@@ -1978,6 +2119,39 @@ mod tests {
         stepped.seek(0.55);
 
         assert!(fresh.particle_count() > 0, "test is vacuous with no particles");
+        assert_eq!(xy(&fresh), xy(&rewound));
+        assert_eq!(xy(&fresh), xy(&stepped));
+    }
+
+    #[test]
+    fn culling_with_an_off_screen_emitter_is_deterministic_under_seek() {
+        // The burst comes from (30, -40), above the frame. Downward
+        // particles enter it and upward ones are culled for moving away, so
+        // the `entered` flag is part of the state each seek path has to
+        // reproduce.
+        let make = || {
+            let mut config = culling_track_config();
+            for keyframe in &mut config.emitter_track.as_mut().unwrap().keyframes {
+                keyframe.y = -40.0;
+            }
+            let mut sim = Simulation::new(config, 5);
+            sim.set_bounds(200.0, 200.0);
+            sim
+        };
+        let mut fresh = make();
+        fresh.seek(0.9);
+
+        let mut rewound = make();
+        rewound.seek(1.0);
+        rewound.seek(0.9);
+
+        let mut stepped = make();
+        stepped.seek(0.8);
+        stepped.seek(0.9);
+
+        assert!(fresh.pool.iter().any(|p| p.entered), "test is vacuous: nothing entered");
+        assert!(fresh.particle_count() < 12, "test is vacuous: nothing was culled");
+        assert_survivors_obey_the_cull_rule(&fresh, 0.0, 200.0, 200.0);
         assert_eq!(xy(&fresh), xy(&rewound));
         assert_eq!(xy(&fresh), xy(&stepped));
     }

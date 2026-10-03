@@ -32,6 +32,12 @@ pub(crate) struct Particle {
     pub rotation: f32,
     pub rotation_speed: f32,
     pub turbulence_seed: f32,
+    /// Whether the particle has been inside the cull rectangle (bounds plus
+    /// `cullMargin`) since it spawned. Only `Simulation::step` sets it, and
+    /// only while culling is active. Once set, leaving the rectangle culls the
+    /// particle; until then it is culled only while moving away from it, so
+    /// an emitter placed outside the frame still works.
+    pub entered: bool,
 }
 
 pub(crate) struct ParticlePool {
@@ -100,6 +106,7 @@ mod tests {
             rotation: 0.0,
             rotation_speed: 0.0,
             turbulence_seed: 0.0,
+            entered: false,
         }
     }
 

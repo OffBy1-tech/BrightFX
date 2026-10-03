@@ -67,7 +67,10 @@ export type EffectConfig = {
   spinDirection?: SpinDirection;
   /** Schema version 4+. Logical px. Removes a particle once its center is
    *  more than this far outside the simulation's bounds (`setViewport` or
-   *  `setBounds`). Omitted or `null` never culls. */
+   *  `setBounds`), after it has been inside that area once. A particle
+   *  outside the area that is moving away from it is removed too, so an
+   *  emitter placed off-screen works with any margin. Omitted or `null`
+   *  never culls. */
   cullMargin?: number | null;
 } & Record<string, unknown>;
 
