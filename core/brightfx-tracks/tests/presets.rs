@@ -22,7 +22,6 @@ use brightfx_core::{ParticleFxConfig, Simulation, MAX_EMITTER_TRACK_DURATION, PL
 use brightfx_tracks::fit_track;
 use brightfx_test_support::{fixtures_dir, regenerating};
 use brightfx_tracks::presets::{library, render_json, FRAME_H, FRAME_W};
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 /// The renderer's `MIN_SCALE`. Anything smaller is clamped back up to it.
@@ -327,8 +326,11 @@ fn at_steady_state_every_preset_leaves_pool_headroom() {
 /// partly visible: twice the particle's reach at its largest (`size` is about
 /// a shape's radius or half-length, and any of the three sizes can be the
 /// largest), plus the glow's blur when bloom draws one. The cull is by
-/// center, so the margin is what keeps the rest of the particle off screen,
-/// with room for the step it moves between checks.
+/// center, so the margin is what keeps the rest of the particle off screen.
+/// Twice the reach leaves slack for rotation and anti-aliasing; it has no
+/// term for how far the particle moves between checks, which is what the
+/// census and `culling_never_removes_a_particle_that_would_have_been_on_the_frame`
+/// are for.
 fn needed_margin(config: &ParticleFxConfig) -> f32 {
     let size = config.start_size.max(config.peak_size).max(config.end_size);
     let glow = if config.glow_bloom { glow_blur_logical(config.glow_radius, size) } else { 0.0 };
@@ -341,6 +343,23 @@ fn every_cull_margin_covers_the_particles_visible_extent() {
         if let Some(margin) = config.cull_margin {
             let needed = needed_margin(&config);
             assert!(margin >= needed, "{name}: cullMargin {margin} is under the {needed} its particles reach");
+        }
+    }
+}
+
+#[test]
+fn every_cull_margin_already_holds_its_emitters_path() {
+    // Fitting to the authored frame leaves the track as it is, so a margin
+    // that `fit_track` would raise here is one that did not hold the
+    // emitter's own path, and a drop swung out past it would be culled for
+    // heading away although the sway would bring it back.
+    for (name, config) in library() {
+        if config.cull_margin.is_some() {
+            let fitted = fit_track(config.clone(), (FRAME_W, FRAME_H), (FRAME_W, FRAME_H)).unwrap();
+            assert_eq!(
+                fitted.cull_margin, config.cull_margin,
+                "{name}: cullMargin is under what its emitter's path and turbulence need"
+            );
         }
     }
 }
@@ -375,39 +394,64 @@ fn the_presets_that_leave_the_frame_set_a_cull_margin() {
 /// culled off screen before it would have drifted back on is never flagged.
 /// This compares the two runs directly. Culling consumes no randomness and
 /// particles do not interact, so a survivor sits at exactly the same place
-/// in both, and every particle that is on the frame in the uncut run must
-/// still be there in the culled one.
+/// in both, and every particle that is on the frame (by its reach, as the
+/// census counts it) in the uncut run must still be there in the culled one.
+///
+/// It runs several seeds, because a loss is a matter of where turbulence
+/// happens to send a drop, and delivery sizes beyond the two authored ones,
+/// because `fit_track` stretches an emitter's path with the frame while a
+/// preset's own margin is a fixed number of pixels.
 #[test]
 fn culling_never_removes_a_particle_that_would_have_been_on_the_frame() {
-    // 25 s: well past the 5 s life ceiling, and long enough for the scatter
+    // 20 s: well past the 5 s life ceiling, and long enough for the scatter
     // paths to visit both edges of the frame many times.
-    const STEPS: usize = 1500;
+    const STEPS: usize = 1200;
+    const SEEDS: [u64; 3] = [7, 11, 23];
+    const FRAMES: [(f32, f32); 5] =
+        [(FRAME_W, FRAME_H), (FRAME_H, FRAME_W), (2560.0, 1440.0), (3840.0, 2160.0), (1920.0, 1920.0)];
     for (name, config) in library().into_iter().filter(|(_, c)| c.cull_margin.is_some()) {
-        for (w, h) in [(FRAME_W, FRAME_H), (FRAME_H, FRAME_W)] {
+        for (w, h) in FRAMES {
             let fitted = fit_track(config.clone(), (FRAME_W, FRAME_H), (w, h)).unwrap();
-            let mut uncut = Simulation::new(fitted.clone(), 7);
-            let mut culled = Simulation::new(fitted, 7);
-            culled.set_bounds(w, h);
-            let mut on_frame = 0usize;
-            for step in 1..=STEPS {
-                let time = step as f32 * PLAYBACK_STEP;
-                uncut.seek(time);
-                culled.seek(time);
-                let kept: HashSet<(u32, u32)> =
-                    culled.buffer().iter().map(|p| (p.x.to_bits(), p.y.to_bits())).collect();
-                for p in uncut.buffer() {
-                    if p.x >= 0.0 && p.x <= w && p.y >= 0.0 && p.y <= h {
-                        on_frame += 1;
-                        assert!(
-                            kept.contains(&(p.x.to_bits(), p.y.to_bits())),
-                            "{name} {w}x{h}: a particle on the frame at ({}, {}) was culled in step {step}",
-                            p.x,
-                            p.y
-                        );
+            for seed in SEEDS {
+                let mut uncut = Simulation::new(fitted.clone(), seed);
+                let mut culled = Simulation::new(fitted.clone(), seed);
+                culled.set_bounds(w, h);
+                let mut on_frame = 0usize;
+                for step in 1..=STEPS {
+                    let time = step as f32 * PLAYBACK_STEP;
+                    uncut.seek(time);
+                    culled.seek(time);
+                    // Culling only removes particles and the pool keeps its
+                    // order, so the culled buffer is an ordered subsequence
+                    // of the uncut one: walk both, no lookup needed.
+                    let kept = culled.buffer();
+                    let mut next = 0;
+                    for p in uncut.buffer() {
+                        let reach = p.size;
+                        let visible = p.x >= -reach && p.x <= w + reach && p.y >= -reach && p.y <= h + reach;
+                        on_frame += usize::from(visible);
+                        let survived = next < kept.len()
+                            && kept[next].x.to_bits() == p.x.to_bits()
+                            && kept[next].y.to_bits() == p.y.to_bits();
+                        if survived {
+                            next += 1;
+                        } else {
+                            assert!(
+                                !visible,
+                                "{name} {w}x{h} seed {seed}: a particle on the frame at ({}, {}) was culled in step {step}",
+                                p.x,
+                                p.y
+                            );
+                        }
                     }
+                    assert_eq!(
+                        next,
+                        kept.len(),
+                        "{name} {w}x{h} seed {seed} step {step}: the culled run holds a particle the uncut run lacks"
+                    );
                 }
+                assert!(on_frame > 0, "{name} {w}x{h} seed {seed}: test is vacuous, nothing was ever on the frame");
             }
-            assert!(on_frame > 0, "{name} {w}x{h}: test is vacuous, nothing was ever on the frame");
         }
     }
 }
