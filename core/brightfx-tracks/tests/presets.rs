@@ -17,6 +17,7 @@
 //! (`magick -size 240x135 -depth 8 rgba:file.rgba out.png`).
 
 use brightfx_core::abi::AbiSimulation;
+use brightfx_core::render::glow_blur_logical;
 use brightfx_core::{ParticleFxConfig, Simulation, MAX_EMITTER_TRACK_DURATION, PLAYBACK_STEP};
 use brightfx_tracks::fit_track;
 use brightfx_test_support::{fixtures_dir, regenerating};
@@ -231,8 +232,16 @@ struct Census {
 /// velocity predicts, to within turbulence and gravity; the first
 /// particle that does not is the one that died. The first step has no
 /// velocity yet and matches on a looser radius.
-fn census(config: ParticleFxConfig, w: f32, h: f32) -> Census {
+///
+/// `bounded` gives the simulation the frame's size, as a host that calls
+/// `set_viewport` or `set_bounds` does, so a preset's `cullMargin` applies.
+/// Without it nothing is culled, which is what a host that never sets
+/// bounds sees.
+fn census(config: ParticleFxConfig, w: f32, h: f32, bounded: bool) -> Census {
     let mut sim = Simulation::new(config, 7);
+    if bounded {
+        sim.set_bounds(w, h);
+    }
     let start = (STEADY_TIME / PLAYBACK_STEP).round() as usize;
     sim.seek(start as f32 * PLAYBACK_STEP);
     let snapshot = |sim: &Simulation| -> Vec<[f32; 4]> {
@@ -279,18 +288,22 @@ fn census(config: ParticleFxConfig, w: f32, h: f32) -> Census {
 fn at_steady_state_no_preset_drops_a_visible_particle_inside_the_frame() {
     // Both frames a composition renders: the authored 16:9 and the fitted
     // 9:16, where a rain has 1920 px to fall instead of 1080.
+    // With and without bounds: a host that sets them culls at `cullMargin`,
+    // one that does not relies on the lifetime alone.
     for (name, config) in library() {
         for (w, h) in [(FRAME_W, FRAME_H), (FRAME_H, FRAME_W)] {
-            let fitted = fit_track(config.clone(), (FRAME_W, FRAME_H), (w, h)).unwrap();
-            let census = census(fitted, w, h);
-            assert!(census.deaths > 0, "{name} {w}x{h}: nothing died in {STEADY_STEPS} steps -- the census is vacuous");
-            let shown: Vec<_> = census.visible_deaths.iter().take(5).collect();
-            assert!(
-                census.visible_deaths.is_empty(),
-                "{name} {w}x{h}: {} of {} deaths were inside the frame above alpha {VISIBLE_ALPHA}, e.g. (x, y, alpha) {shown:?}",
-                census.visible_deaths.len(),
-                census.deaths
-            );
+            for bounded in [false, true] {
+                let fitted = fit_track(config.clone(), (FRAME_W, FRAME_H), (w, h)).unwrap();
+                let census = census(fitted, w, h, bounded);
+                assert!(census.deaths > 0, "{name} {w}x{h} bounded={bounded}: nothing died in {STEADY_STEPS} steps -- the census is vacuous");
+                let shown: Vec<_> = census.visible_deaths.iter().take(5).collect();
+                assert!(
+                    census.visible_deaths.is_empty(),
+                    "{name} {w}x{h} bounded={bounded}: {} of {} deaths were inside the frame above alpha {VISIBLE_ALPHA}, e.g. (x, y, alpha) {shown:?}",
+                    census.visible_deaths.len(),
+                    census.deaths
+                );
+            }
         }
     }
 }
@@ -300,9 +313,162 @@ fn at_steady_state_every_preset_leaves_pool_headroom() {
     let limit = (MAX_PARTICLES as f32 * (1.0 - POOL_HEADROOM)) as usize;
     for (name, config) in library() {
         for (w, h) in [(FRAME_W, FRAME_H), (FRAME_H, FRAME_W)] {
-            let fitted = fit_track(config.clone(), (FRAME_W, FRAME_H), (w, h)).unwrap();
-            let peak = census(fitted, w, h).pool_peak;
-            assert!(peak <= limit, "{name} {w}x{h}: pool peaked at {peak}, over {limit} ({MAX_PARTICLES} less {POOL_HEADROOM} headroom)");
+            for bounded in [false, true] {
+                let fitted = fit_track(config.clone(), (FRAME_W, FRAME_H), (w, h)).unwrap();
+                let peak = census(fitted, w, h, bounded).pool_peak;
+                assert!(peak <= limit, "{name} {w}x{h} bounded={bounded}: pool peaked at {peak}, over {limit} ({MAX_PARTICLES} less {POOL_HEADROOM} headroom)");
+            }
         }
+    }
+}
+
+/// The least a `cullMargin` can be before a particle can pop out while still
+/// partly visible: twice the particle's reach at its largest (`size` is about
+/// a shape's radius or half-length, and any of the three sizes can be the
+/// largest), plus the glow's blur when bloom draws one. The cull is by
+/// center, so the margin is what keeps the rest of the particle off screen.
+/// Twice the reach leaves slack for rotation and anti-aliasing; it has no
+/// term for how far the particle moves between checks, which is what the
+/// census and `culling_never_removes_a_particle_that_would_have_been_on_the_frame`
+/// are for.
+fn needed_margin(config: &ParticleFxConfig) -> f32 {
+    let size = config.start_size.max(config.peak_size).max(config.end_size);
+    let glow = if config.glow_bloom { glow_blur_logical(config.glow_radius, size) } else { 0.0 };
+    2.0 * size + glow
+}
+
+#[test]
+fn every_cull_margin_covers_the_particles_visible_extent() {
+    for (name, config) in library() {
+        if let Some(margin) = config.cull_margin {
+            let needed = needed_margin(&config);
+            assert!(margin >= needed, "{name}: cullMargin {margin} is under the {needed} its particles reach");
+        }
+    }
+}
+
+#[test]
+fn every_cull_margin_already_holds_its_emitters_path() {
+    // Fitting to the authored frame leaves the track as it is, so a margin
+    // that `fit_track` would raise here is one that did not hold the
+    // emitter's own path, and a drop swung out past it would be culled for
+    // heading away although the sway would bring it back.
+    for (name, config) in library() {
+        if config.cull_margin.is_some() {
+            let fitted = fit_track(config.clone(), (FRAME_W, FRAME_H), (FRAME_W, FRAME_H)).unwrap();
+            assert_eq!(
+                fitted.cull_margin, config.cull_margin,
+                "{name}: cullMargin is under what its emitter's path and turbulence need"
+            );
+        }
+    }
+}
+
+/// The presets whose particles leave the frame during their life, and so
+/// fill the pool with ones nobody sees unless they are culled. The others
+/// fade out inside the frame and gain almost nothing (measured within 4%).
+const LEAVES_THE_FRAME: [&str; 3] = ["frosting-rain", "sprinkle-rain", "flight-arc"];
+
+/// `flight-arc` is sprite-mode: the composition draws 60-120 px glyphs, so
+/// its margin covers half a glyph, which the core's size cap of 40 does not
+/// show. 2 x 60.
+const SPRITE_GLYPH_MARGIN: f32 = 120.0;
+
+#[test]
+fn the_presets_that_leave_the_frame_set_a_cull_margin() {
+    for (name, config) in library() {
+        if LEAVES_THE_FRAME.contains(&name) {
+            let margin = config.cull_margin.unwrap_or_else(|| panic!("{name} sets no cullMargin"));
+            assert!(margin >= needed_margin(&config), "{name}: cullMargin {margin} is too small");
+            if name == "flight-arc" {
+                assert!(margin >= SPRITE_GLYPH_MARGIN, "{name}: cullMargin {margin} is under half a sprite glyph");
+            }
+        } else {
+            assert!(config.cull_margin.is_none(), "{name} gains almost nothing from a cullMargin; leave it unset");
+        }
+    }
+}
+
+/// Culling must only ever remove a particle nobody would have seen. The
+/// census cannot show that: it looks at where a particle was last, so a drop
+/// culled off screen before it would have drifted back on is never flagged.
+/// This compares the two runs directly. Culling consumes no randomness and
+/// particles do not interact, so a survivor sits at exactly the same place
+/// in both, and every particle that is on the frame (by its reach, as the
+/// census counts it) in the uncut run must still be there in the culled one.
+///
+/// It runs several seeds, because a loss is a matter of where turbulence
+/// happens to send a drop, and delivery sizes beyond the two authored ones,
+/// because `fit_track` stretches an emitter's path with the frame while a
+/// preset's own margin is a fixed number of pixels.
+#[test]
+fn culling_never_removes_a_particle_that_would_have_been_on_the_frame() {
+    // 20 s: well past the 5 s life ceiling, and long enough for the scatter
+    // paths to visit both edges of the frame many times.
+    const STEPS: usize = 1200;
+    const SEEDS: [u64; 3] = [7, 11, 23];
+    const FRAMES: [(f32, f32); 5] =
+        [(FRAME_W, FRAME_H), (FRAME_H, FRAME_W), (2560.0, 1440.0), (3840.0, 2160.0), (1920.0, 1920.0)];
+    for (name, config) in library().into_iter().filter(|(_, c)| c.cull_margin.is_some()) {
+        for (w, h) in FRAMES {
+            let fitted = fit_track(config.clone(), (FRAME_W, FRAME_H), (w, h)).unwrap();
+            for seed in SEEDS {
+                let mut uncut = Simulation::new(fitted.clone(), seed);
+                let mut culled = Simulation::new(fitted.clone(), seed);
+                culled.set_bounds(w, h);
+                let mut on_frame = 0usize;
+                for step in 1..=STEPS {
+                    let time = step as f32 * PLAYBACK_STEP;
+                    uncut.seek(time);
+                    culled.seek(time);
+                    // Culling only removes particles and the pool keeps its
+                    // order, so the culled buffer is an ordered subsequence
+                    // of the uncut one: walk both, no lookup needed.
+                    let kept = culled.buffer();
+                    let mut next = 0;
+                    for p in uncut.buffer() {
+                        let reach = p.size;
+                        let visible = p.x >= -reach && p.x <= w + reach && p.y >= -reach && p.y <= h + reach;
+                        on_frame += usize::from(visible);
+                        let survived = next < kept.len()
+                            && kept[next].x.to_bits() == p.x.to_bits()
+                            && kept[next].y.to_bits() == p.y.to_bits();
+                        if survived {
+                            next += 1;
+                        } else {
+                            assert!(
+                                !visible,
+                                "{name} {w}x{h} seed {seed}: a particle on the frame at ({}, {}) was culled in step {step}",
+                                p.x,
+                                p.y
+                            );
+                        }
+                    }
+                    assert_eq!(
+                        next,
+                        kept.len(),
+                        "{name} {w}x{h} seed {seed} step {step}: the culled run holds a particle the uncut run lacks"
+                    );
+                }
+                assert!(on_frame > 0, "{name} {w}x{h} seed {seed}: test is vacuous, nothing was ever on the frame");
+            }
+        }
+    }
+}
+
+#[test]
+fn culling_shrinks_the_rains_pools_in_the_authored_frame() {
+    // The point of the margin: a rain sized to fall 1920 px no longer keeps
+    // the drops that have already left a 1080 px frame. Relative, so a
+    // later tuning of speed or life does not stale it.
+    for name in ["frosting-rain", "sprinkle-rain"] {
+        let config = library().into_iter().find(|(n, _)| *n == name).unwrap().1;
+        let open = census(config.clone(), FRAME_W, FRAME_H, false).pool_peak;
+        let culled = census(config, FRAME_W, FRAME_H, true).pool_peak;
+        assert!(open >= 200, "{name}: test is vacuous, the uncut pool is only {open}");
+        assert!(
+            culled as f32 <= open as f32 * 0.75,
+            "{name}: culling left {culled} of {open} -- less than a quarter saved"
+        );
     }
 }
