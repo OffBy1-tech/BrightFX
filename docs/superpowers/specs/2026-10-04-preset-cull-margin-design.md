@@ -55,18 +55,23 @@ sees, and to keep the old figures for one without.
 
 ## Tests (`tests/presets.rs`)
 
-- `census` sets `set_bounds(w, h)`, so the pool-headroom guard and the
-  visible-death guard measure what a real host sees. The visible-death guard
-  stays: a culled particle dies at least a margin outside the frame.
+- `census` takes a `bounded` switch, and the pool-headroom guard and the
+  visible-death guard run both ways: bounded (what a host that calls
+  `set_viewport` or `set_bounds` sees, so `cullMargin` applies) and unbounded
+  (a host that never does). The visible-death guard stays: a culled particle
+  dies at least a margin outside the frame.
 - Every preset with a `cullMargin` must cover its visible extent: at least 2x
   `max(startSize, peakSize)`, plus `glowRadius` when `glowBloom` is on. This
   keeps a particle from popping out while partly visible.
-- The three presets must actually benefit: with culling on, the authored-frame
-  pool peak is at least 25% below the no-cull peak. A relative check, so it
-  does not go stale when a preset is tuned.
+- Exactly the three presets named above set a margin, and `flight-arc`'s is at
+  least 120 (half a sprite glyph). The other four must leave it unset.
+- The two rains must actually benefit: with culling on, the authored-frame
+  pool peak is at most 75% of the no-cull peak. A relative check, so it does
+  not go stale when a preset is tuned. It is not applied to `flight-arc`,
+  whose pool of about 11 is too small for a ratio to be stable.
 - `golden_frames_match` already runs through `set_viewport`, so culling is on
   there. Only off-screen particles are removed, so the frames should not
-  change. If they drift, investigate before regenerating anything.
+  change; they did not.
 
 ## Out of scope
 
