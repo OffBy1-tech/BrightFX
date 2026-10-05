@@ -23,7 +23,7 @@
 //! delivery frame spends half its life below a 1080-high one, so the
 //! rains' pools run to ~270-380 to keep ~115-170 in a 1920×1080 frame.
 //! The rains and `flight-arc` set a margin, which takes those pools to
-//! ~130-190 at 1920×1080 and ~210-310 at 1080×1920; a host that never
+//! ~135-185 at 1920×1080 and ~215-310 at 1080×1920; a host that never
 //! sets bounds sees the uncut figures. The other four presets fade out
 //! inside the frame, so a margin would save them under 4% and they set
 //! none. The margin is by the particle's center, so it is at least twice
@@ -319,10 +319,17 @@ pub fn sparkles() -> ParticleFxConfig {
 ///
 /// The spawn rate overshoots the component's 70: 0.9 per step keeps
 /// ~115 in a 1920×1080 frame, the density this preset has shipped with,
-/// in a pool of ~270 uncut. `cullMargin` 24 is twice a capsule's ~11 px
-/// reach, and takes the pool to ~130 at 1920×1080 and ~210 at 1080×1920
-/// for a host that sets bounds. The emitter at y = -20 is inside the
-/// margin, so nothing is culled at birth.
+/// in a pool of ~270 uncut. `cullMargin` takes the pool to ~135 at
+/// 1920×1080 and ~215 at 1080×1920 for a host that sets bounds. It is
+/// `SCATTER_MARGIN` + 4, not the 24 a capsule's ~11 px reach would need:
+/// the emitter sweeps x from -60 to 1980, and a drop born outside a
+/// narrower margin and heading outward is culled even though its
+/// turbulence would carry it back onto the frame (24 lost ~80 drop-steps
+/// of 167,000 in 25 s, which `tests/presets.rs` now catches). With the
+/// emitter's whole path inside the margin, only drops that have left are
+/// culled. In a fitted 9:16 frame the emitter's y of -20 stretches to -36,
+/// past the margin, where a drop moving toward the frame is kept until it
+/// has entered.
 pub fn sprinkle_rain() -> ParticleFxConfig {
     let mut c = base(
         "sprinkle-rain",
@@ -345,7 +352,7 @@ pub fn sprinkle_rain() -> ParticleFxConfig {
     c.spin_direction = SpinDirection::Random;
     c.lifetime_min = 300.0;
     c.lifetime_max = 300.0;
-    c.cull_margin = Some(24.0);
+    c.cull_margin = Some(SCATTER_MARGIN + 4.0);
     c.start_size = 10.0;
     c.peak_size = 10.0;
     c.end_size = 10.0;
@@ -386,8 +393,10 @@ pub fn sprinkle_rain() -> ParticleFxConfig {
 /// ~190 at 1920×1080 and ~310 at 1080×1920 for a host that sets bounds.
 /// It does not loosen the fall above: a drop must still clear 1920 px
 /// inside its life, since the cull only stops the excess life from filling
-/// the pool in a shorter frame. The emitter at y = -20 is inside the
-/// margin, so nothing is culled at birth.
+/// the pool in a shorter frame. The emitter at y = -20 is inside the margin
+/// in the authored frame; in a fitted 9:16 frame it stretches to -36, past
+/// the margin, where a drop moving toward the frame is kept until it has
+/// entered.
 ///
 /// The palette is the component's six colours -- two pinks, white, and
 /// yellow, purple, and mint accents -- dealt one per drop. Soft accents
@@ -488,10 +497,11 @@ pub fn bubbles() -> ParticleFxConfig {
 /// `cullMargin` 120 is twice the glyph's 60 px half-extent. The core's
 /// `size` (34-40) is not what is drawn, and a margin sized to it would
 /// remove a glyph while part of it is still on screen. The emitter at
-/// x = -100 is outside the margin, but a particle moving toward the frame
-/// is kept until it has entered. It saves little (a pool of ~11 becomes
-/// ~8 at 1920×1080 and ~5 at 1080×1920); it is here so the throws are
-/// gone as soon as they have left.
+/// x = -100 is inside the margin in the authored frame, so nothing is
+/// culled at birth; the entry rule would keep a throw moving toward the
+/// frame even if it were not. It saves little (a pool of ~11 becomes ~8 at
+/// 1920×1080 and ~5 at 1080×1920); it is here so the throws are gone as
+/// soon as they have left.
 pub fn flight_arc() -> ParticleFxConfig {
     let mut c = base(
         "flight-arc",

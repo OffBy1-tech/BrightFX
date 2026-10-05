@@ -17,10 +17,12 @@
 //! (`magick -size 240x135 -depth 8 rgba:file.rgba out.png`).
 
 use brightfx_core::abi::AbiSimulation;
+use brightfx_core::render::glow_blur_logical;
 use brightfx_core::{ParticleFxConfig, Simulation, MAX_EMITTER_TRACK_DURATION, PLAYBACK_STEP};
 use brightfx_tracks::fit_track;
 use brightfx_test_support::{fixtures_dir, regenerating};
 use brightfx_tracks::presets::{library, render_json, FRAME_H, FRAME_W};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 /// The renderer's `MIN_SCALE`. Anything smaller is clamped back up to it.
@@ -322,13 +324,15 @@ fn at_steady_state_every_preset_leaves_pool_headroom() {
 }
 
 /// The least a `cullMargin` can be before a particle can pop out while still
-/// partly visible: twice the particle's reach (`size` is about a shape's
-/// radius or half-length), plus the glow when bloom draws one. The cull is
-/// by center, so the margin is what keeps the rest of the particle off
-/// screen, with room for the step it moves between checks.
+/// partly visible: twice the particle's reach at its largest (`size` is about
+/// a shape's radius or half-length, and any of the three sizes can be the
+/// largest), plus the glow's blur when bloom draws one. The cull is by
+/// center, so the margin is what keeps the rest of the particle off screen,
+/// with room for the step it moves between checks.
 fn needed_margin(config: &ParticleFxConfig) -> f32 {
-    let glow = if config.glow_bloom { config.glow_radius } else { 0.0 };
-    2.0 * config.start_size.max(config.peak_size) + glow
+    let size = config.start_size.max(config.peak_size).max(config.end_size);
+    let glow = if config.glow_bloom { glow_blur_logical(config.glow_radius, size) } else { 0.0 };
+    2.0 * size + glow
 }
 
 #[test]
@@ -362,6 +366,48 @@ fn the_presets_that_leave_the_frame_set_a_cull_margin() {
             }
         } else {
             assert!(config.cull_margin.is_none(), "{name} gains almost nothing from a cullMargin; leave it unset");
+        }
+    }
+}
+
+/// Culling must only ever remove a particle nobody would have seen. The
+/// census cannot show that: it looks at where a particle was last, so a drop
+/// culled off screen before it would have drifted back on is never flagged.
+/// This compares the two runs directly. Culling consumes no randomness and
+/// particles do not interact, so a survivor sits at exactly the same place
+/// in both, and every particle that is on the frame in the uncut run must
+/// still be there in the culled one.
+#[test]
+fn culling_never_removes_a_particle_that_would_have_been_on_the_frame() {
+    // 25 s: well past the 5 s life ceiling, and long enough for the scatter
+    // paths to visit both edges of the frame many times.
+    const STEPS: usize = 1500;
+    for (name, config) in library().into_iter().filter(|(_, c)| c.cull_margin.is_some()) {
+        for (w, h) in [(FRAME_W, FRAME_H), (FRAME_H, FRAME_W)] {
+            let fitted = fit_track(config.clone(), (FRAME_W, FRAME_H), (w, h)).unwrap();
+            let mut uncut = Simulation::new(fitted.clone(), 7);
+            let mut culled = Simulation::new(fitted, 7);
+            culled.set_bounds(w, h);
+            let mut on_frame = 0usize;
+            for step in 1..=STEPS {
+                let time = step as f32 * PLAYBACK_STEP;
+                uncut.seek(time);
+                culled.seek(time);
+                let kept: HashSet<(u32, u32)> =
+                    culled.buffer().iter().map(|p| (p.x.to_bits(), p.y.to_bits())).collect();
+                for p in uncut.buffer() {
+                    if p.x >= 0.0 && p.x <= w && p.y >= 0.0 && p.y <= h {
+                        on_frame += 1;
+                        assert!(
+                            kept.contains(&(p.x.to_bits(), p.y.to_bits())),
+                            "{name} {w}x{h}: a particle on the frame at ({}, {}) was culled in step {step}",
+                            p.x,
+                            p.y
+                        );
+                    }
+                }
+            }
+            assert!(on_frame > 0, "{name} {w}x{h}: test is vacuous, nothing was ever on the frame");
         }
     }
 }

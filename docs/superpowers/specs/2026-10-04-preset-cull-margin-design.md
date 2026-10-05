@@ -14,12 +14,12 @@ can match what is on screen. No preset uses it yet.
 ## Measurement
 
 Steady-state pool size (peak over 180 steps from t = 9 s, fitted to each
-frame), with `cullMargin` at 2x the particle's visible extent:
+frame), with the margins below:
 
 | preset        | 1920x1080 no cull | 1920x1080 culled | 1080x1920 no cull | 1080x1920 culled |
 |---------------|-------------------|------------------|-------------------|------------------|
-| frosting-rain | 374               | 187              | 374               | 311              |
-| sprinkle-rain | 270               | 130              | 270               | 210              |
+| frosting-rain | 374               | 186              | 374               | 308              |
+| sprinkle-rain | 270               | 136              | 270               | 215              |
 | flight-arc    | 11                | 8                | 11                | 5                |
 | confetti, fireflies, sparkles, bubbles | 15-215 | within 4% | same | within 4% |
 
@@ -28,19 +28,29 @@ nothing there and they are left alone.
 
 ## Design
 
-- `frosting-rain` and `sprinkle-rain`: `cullMargin` 24. Their capsules reach
-  about 11 px from the center, so 24 is about 2x, which also covers the
-  rotation and anti-aliasing. `cullMargin` is a center-only cull, so a
-  particle is fully off screen once its center is past the margin.
+- `frosting-rain`: `cullMargin` 24. Its capsules reach about 11 px from the
+  center, so 24 is about 2x, which also covers the rotation and
+  anti-aliasing. `cullMargin` is a center-only cull, so a particle is fully
+  off screen once its center is past the margin.
+- `sprinkle-rain`: `cullMargin` 64 (`SCATTER_MARGIN` + 4), not 24. Its emitter
+  sweeps x from -60 to 1980, and the first version's margin of 24 was inside
+  that sweep. A drop born outside the margin and heading outward is culled by
+  the moving-away rule even though turbulence (a swing of up to 1.5 px per
+  step) would carry it back onto the frame. Review measured 80 drop-steps of
+  167,000 lost at 1920x1080 in 25 s, and the first one was a drop at (1918,
+  618) that was on the frame. A margin that holds the emitter's whole path
+  removes that. Pool cost: about 6 particles.
 - `flight-arc`: `cullMargin` 120. It is a sprite-mode preset whose glyphs are
   60-120 px, scaled up by the composition from the core's size-40 cap, so the
   margin has to cover half a glyph, not the core's `size`.
 - Motion, lifetimes, colors, spawn rates and the other four presets do not
   change. The three preset JSON files change only in `cullMargin` (`null` to
   the value).
-- Emitters need no special handling after #23: the rains' emitter at y = -20
-  is inside the margin, and `flight-arc`'s at x = -100 is outside it but
-  moving toward the frame, so its particles are kept until they enter.
+- In the authored frame every emitter path is inside its margin: the rains'
+  y = -20 (and `sprinkle-rain`'s x sweep) and `flight-arc`'s x = -100 against
+  120. In a fitted 9:16 frame the rains' y stretches to -36, past 24, where
+  #23's entry rule keeps a drop that is moving toward the frame until it has
+  entered.
 - The motion constraint stays. The slowest drop must still clear 1920 px
   inside the 300-step life ceiling; culling only stops the excess life from
   filling the pool in a shorter frame.
@@ -61,8 +71,16 @@ sees, and to keep the old figures for one without.
   (a host that never does). The visible-death guard stays: a culled particle
   dies at least a margin outside the frame.
 - Every preset with a `cullMargin` must cover its visible extent: at least 2x
-  `max(startSize, peakSize)`, plus `glowRadius` when `glowBloom` is on. This
-  keeps a particle from popping out while partly visible.
+  the largest of `startSize`, `peakSize` and `endSize`, plus the glow's blur
+  (the core's `glow_blur_logical`) when `glowBloom` is on. This keeps a
+  particle from popping out while partly visible.
+- Culling must only remove a particle nobody would have seen. Each preset with
+  a margin runs twice, with and without bounds, for 25 s in both frames, and
+  every particle that is on the frame in the uncut run must still be on it in
+  the culled run. Culling consumes no randomness and particles do not
+  interact, so a survivor is bit-identical in both runs. The census cannot
+  show this, since it only sees where a particle was last. This is the guard
+  that caught `sprinkle-rain`'s first margin of 24.
 - Exactly the three presets named above set a margin, and `flight-arc`'s is at
   least 120 (half a sprite glyph). The other four must leave it unset.
 - The two rains must actually benefit: with culling on, the authored-frame
