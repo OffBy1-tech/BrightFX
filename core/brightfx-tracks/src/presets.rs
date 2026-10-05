@@ -16,12 +16,23 @@
 //! steps is five seconds of travel. Speeds are px per step, so the
 //! Remotion components' "px per 30 fps frame" halve on the way in.
 //!
-//! A particle dies when its life runs out, not when it leaves the frame,
-//! so that population includes the ones already off screen. A rain sized
-//! to reach the bottom of the 1080×1920 delivery frame spends half its
-//! life below a 1080-high one, which is why the rains' pools run to
-//! ~270-380 to keep ~115-170 in a 1920×1080 frame. `MAX_PARTICLES` is
-//! 500; `tests/presets.rs` holds every preset to 400 at steady state.
+//! A particle dies when its life runs out, or, with `cullMargin` and a
+//! host that gave the simulation its frame size, once it is that far
+//! outside the frame. Without the cull the population includes the ones
+//! already off screen: a rain sized to reach the bottom of the 1080×1920
+//! delivery frame spends half its life below a 1080-high one, so the
+//! rains' pools run to ~270-380 to keep ~115-170 in a 1920×1080 frame.
+//! The rains and `flight-arc` set a margin, which takes those pools to
+//! ~140-190 at 1920×1080 and ~215-320 at 1080×1920; a host that never
+//! sets bounds sees the uncut figures. The other four presets fade out
+//! inside the frame, so a margin would save them under 4% and they set
+//! none. The margin is by the particle's center, so it is at least twice
+//! the particle's reach, and at least what holds the emitter's path
+//! including the sway of turbulence (`tests/presets.rs` checks both, and
+//! checks that culling never removes a particle that would have been on
+//! the frame). `MAX_PARTICLES` is
+//! 500; `tests/presets.rs` holds every preset to 400 at steady state, with
+//! and without bounds.
 //!
 //! The same test holds every preset to dying out of sight, in both
 //! frames. The rains do it with margin in speed and life, not a fade:
@@ -44,6 +55,7 @@ use brightfx_core::{
     SpinDirection, MAX_EMITTER_TRACK_DURATION, PLAYBACK_STEP,
 };
 
+use crate::fit::emitter_cull_margin;
 use crate::sweep_track;
 
 pub const FRAME_W: f32 = 1920.0;
@@ -53,6 +65,8 @@ pub const FRAME_H: f32 = 1080.0;
 pub const TRACK_DURATION: f32 = MAX_EMITTER_TRACK_DURATION;
 /// How far past the left and right edges `scatter_sweep` reaches.
 const SCATTER_MARGIN: f32 = 60.0;
+/// How far above the top edge the rains' emitters sit.
+const RAIN_EDGE: f32 = 20.0;
 
 /// A wandering emitter path: every `leg` seconds it arrives at another
 /// pseudo-random point of the band `y_min..y_max`, sweeping the chord in
@@ -311,14 +325,24 @@ pub fn sparkles() -> ParticleFxConfig {
 ///
 /// The spawn rate overshoots the component's 70: 0.9 per step keeps
 /// ~115 in a 1920×1080 frame, the density this preset has shipped with,
-/// in a pool of ~270.
+/// in a pool of ~270 uncut. `cullMargin` takes the pool to ~140 at
+/// 1920×1080 and ~215 at 1080×1920 for a host that sets bounds. It is 82,
+/// not the 24 a capsule's ~11 px reach would need, because of the emitter:
+/// it sweeps x from -60 to 1980, and a drop born near the edge of a narrower
+/// margin and swung out past it by turbulence is culled for heading away
+/// although the sway would carry it back onto the frame. The margin is the
+/// emitter's excursion plus the spawn jitter plus the sway
+/// (`fit::emitter_cull_margin`): 60 + 2 + 24 × 0.8, rounded up. A margin of
+/// 24 lost ~80 drop-steps of 167,000 in 25 s, and one 4 px past the emitter
+/// still lost a few; `tests/presets.rs` compares a culled run with an uncut
+/// one, and `fit_track` raises the margin for a wider frame the same way.
 pub fn sprinkle_rain() -> ParticleFxConfig {
     let mut c = base(
         "sprinkle-rain",
         "Sprinkle Rain",
         "Rainbow sprinkles raining down from the top edge",
         "sprinkle",
-        scatter_sweep(-20.0, -20.0, 0.1),
+        scatter_sweep(-RAIN_EDGE, -RAIN_EDGE, 0.1),
     );
     c.emitter = emitter(0.9, 30, EmissionPattern::DirectionalCone, 90.0, 20.0);
     c.shape = ParticleShape::Capsule;
@@ -334,6 +358,7 @@ pub fn sprinkle_rain() -> ParticleFxConfig {
     c.spin_direction = SpinDirection::Random;
     c.lifetime_min = 300.0;
     c.lifetime_max = 300.0;
+    c.cull_margin = Some(emitter_cull_margin(SCATTER_MARGIN, c.turbulence).ceil());
     c.start_size = 10.0;
     c.peak_size = 10.0;
     c.end_size = 10.0;
@@ -369,7 +394,15 @@ pub fn sprinkle_rain() -> ParticleFxConfig {
 /// At 0.4 the slowest mean fall is 7.5 - 0.75 = 6.75 px/step, which
 /// clears a 1920 px frame in ~260 steps, inside the 270–280-step life.
 /// Measured over 30 s at 9:16: none of ~2,430 deaths inside the frame.
-/// 1.35 per step holds ~170 in a 1920×1080 frame, in a pool of ~376.
+/// 1.35 per step holds ~170 in a 1920×1080 frame, in a pool of ~376 uncut.
+/// `cullMargin` takes the pool to ~190 at 1920×1080 and ~320 at 1080×1920
+/// for a host that sets bounds. It does not loosen the fall above: a drop
+/// must still clear 1920 px inside its life, since the cull only stops the
+/// excess life from filling the pool in a shorter frame. The margin is 32,
+/// the emitter's 20 px above the frame plus the spawn jitter plus the sway
+/// of turbulence 0.4 (`fit::emitter_cull_margin`, see `sprinkle_rain`),
+/// rounded up; a capsule's ~11 px reach alone would need only 22.
+/// `fit_track` raises it where the frame stretches the emitter's y.
 ///
 /// The palette is the component's six colours -- two pinks, white, and
 /// yellow, purple, and mint accents -- dealt one per drop. Soft accents
@@ -382,7 +415,7 @@ pub fn frosting_rain() -> ParticleFxConfig {
         "Frosting Rain",
         "Pink frosting drops raining from the top edge",
         "frosting",
-        sweep_track((0.0, -20.0), (FRAME_W, -20.0), 0.5, TRACK_DURATION),
+        sweep_track((0.0, -RAIN_EDGE), (FRAME_W, -RAIN_EDGE), 0.5, TRACK_DURATION),
     );
     c.emitter = emitter(1.35, 30, EmissionPattern::DirectionalCone, 90.0, 15.0);
     c.shape = ParticleShape::Capsule;
@@ -398,6 +431,7 @@ pub fn frosting_rain() -> ParticleFxConfig {
     c.spin_direction = SpinDirection::Random;
     c.lifetime_min = 270.0;
     c.lifetime_max = 280.0;
+    c.cull_margin = Some(emitter_cull_margin(RAIN_EDGE, c.turbulence).ceil());
     c.start_size = 10.0;
     c.peak_size = 11.0;
     c.end_size = 10.0;
@@ -465,6 +499,16 @@ pub fn bubbles() -> ParticleFxConfig {
 /// centre is y = 144 at 1920×1080 and y = 529 fitted to 1080×1920. The
 /// 300-step life outlasts the slowest crossing, so nothing vanishes on
 /// screen.
+///
+/// `cullMargin` 120 is twice the glyph's 60 px half-extent. The core's
+/// `size` (34-40) is not what is drawn, and a margin sized to it would
+/// remove a glyph while part of it is still on screen. The emitter at
+/// x = -100 is inside the margin in the authored frame, so nothing is
+/// culled at birth; the entry rule would keep a throw moving toward the
+/// frame even if it were not. `fit_track` raises it where a wider frame
+/// stretches the emitter's x (to ~200 at 3840×2160). It saves little (a pool
+/// of ~11 becomes ~8 at 1920×1080 and ~5 at 1080×1920); it is here so the
+/// throws are gone as soon as they have left.
 pub fn flight_arc() -> ParticleFxConfig {
     let mut c = base(
         "flight-arc",
@@ -486,6 +530,7 @@ pub fn flight_arc() -> ParticleFxConfig {
     c.rotation_speed_max = 0.05;
     c.lifetime_min = 300.0;
     c.lifetime_max = 300.0;
+    c.cull_margin = Some(120.0);
     c.start_size = 34.0;
     c.peak_size = 40.0;
     c.end_size = 36.0;
