@@ -46,7 +46,8 @@ export function unwrap(json, what = "call") {
   return envelope;
 }
 
-/** Applies a config, returning the clamped field list. */
+/** Applies a config, returning the clamped field list. (The envelope also
+ *  carries advisory `warnings`; the harness does not surface them.) */
 export function applyConfig(sim, json) {
   return unwrap(sim.setConfig(json), "config").clamped;
 }

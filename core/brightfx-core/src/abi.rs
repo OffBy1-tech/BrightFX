@@ -307,7 +307,7 @@ impl AbiSimulation {
 
     /// Allocates the frame for a `width x height` device-pixel viewport at
     /// `scale` device pixels per logical unit. Returns an envelope like
-    /// `set_config`: `{"ok":true,"clamped":[...]}` with any of
+    /// `set_config`: `{"ok":true,"clamped":[...],"warnings":[]}` with any of
     /// `viewport.width`, `viewport.height`, `viewport.scale`, or
     /// `{"ok":false,"error":"..."}` for a zero dimension.
     ///
@@ -871,6 +871,7 @@ mod tests {
             let value = parse(&sim.set_viewport(64, 48, 1.0));
             assert_eq!(value["ok"], true);
             assert_eq!(value["clamped"].as_array().unwrap().len(), 0);
+            assert_eq!(value["warnings"].as_array().unwrap().len(), 0);
 
             let value = parse(&sim.set_viewport(64, 48, 100.0));
             assert_eq!(value["ok"], true);
