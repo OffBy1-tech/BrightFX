@@ -62,6 +62,18 @@ void bfx_string_free(char *text);
 void bfx_set_emitter(struct BfxSimulation *sim, float x, float y, float vx, float vy, bool active);
 
 /**
+ * Sets the logical-unit rectangle `[0, width] x [0, height]` that the
+ * config's `cullMargin` is measured from, for a host with no viewport
+ * (sprite mode). `bfx_set_viewport` sets it itself. A non-finite or
+ * non-positive dimension clears it, and with no bounds nothing is culled.
+ * Culls the live particles against the new bounds immediately.
+ *
+ * # Safety
+ * `sim` must be a valid handle or NULL.
+ */
+void bfx_set_bounds(struct BfxSimulation *sim, float width, float height);
+
+/**
  * # Safety
  * `sim` must be a valid handle or NULL.
  */
@@ -81,14 +93,15 @@ void bfx_advance(struct BfxSimulation *sim, float dt);
  * `time` has fired and the simulation may sit up to one step past it: a
  * seek at or after the previous one steps forward
  * from it, and any other call sequence -- a backward seek, or any
- * `bfx_advance`, `bfx_trigger_burst`, `bfx_set_emitter`, or
- * `bfx_set_config` since -- replays from t=0, giving the same buffer
+ * `bfx_advance`, `bfx_trigger_burst`, `bfx_set_emitter`,
+ * `bfx_set_bounds` (with a new size), or `bfx_set_config` since -- replays from t=0, giving the same buffer
  * either way.
  *
  * # Safety
  * `sim` must be a valid handle or NULL.
  */
-void bfx_seek(struct BfxSimulation *sim, float time);
+void bfx_seek(struct BfxSimulation *sim,
+              float time);
 
 /**
  * Start of the particle buffer: `bfx_particle_count() * bfx_particle_floats()`
