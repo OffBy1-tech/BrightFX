@@ -266,12 +266,17 @@ pub struct ParticleFxConfig {
 impl ParticleFxConfig {
     /// Advisory warnings for a config that will overflow the particle
     /// pool. The pool holds `MAX_PARTICLES` and evicts the oldest particle
-    /// when full, so a config whose steady-state population (the larger
-    /// spawn rate x the longest lifetime, plus one burst) exceeds it loses
-    /// particles mid-life, silently. Call after `clamp_to_bounds`; the
-    /// config is not changed.
+    /// when full, so a config whose worst-case population (the larger
+    /// effective spawn rate x the longest lifetime, plus one burst)
+    /// exceeds it can lose particles mid-life, silently. An upper bound
+    /// for a single burst: `cullMargin` removing particles early and
+    /// repeated bursts from a track or host are not modelled. Call after
+    /// `clamp_to_bounds`; the config is not changed.
     pub fn pool_warnings(&self) -> Vec<String> {
-        let rate = self.emitter.spawn_rate_while_active.max(self.emitter.spawn_rate_idle);
+        // Idle emission is one particle at most per step, with probability
+        // `rate * 0.3` (see `Simulation::step`).
+        let idle = (self.emitter.spawn_rate_idle * 0.3).min(1.0);
+        let rate = self.emitter.spawn_rate_while_active.max(idle);
         let peak = rate * self.lifetime_max + self.emitter.spawn_burst_size as f32;
         if peak > MAX_PARTICLES as f32 {
             vec![format!(
@@ -467,8 +472,11 @@ mod tests {
         config.emitter.spawn_burst_size = 21;
         assert_eq!(config.pool_warnings().len(), 1, "480 + 21 is over 500");
         config.emitter.spawn_burst_size = 0;
-        config.emitter.spawn_rate_idle = 1.7;
-        assert_eq!(config.pool_warnings().len(), 1, "idle rate counts");
+        config.emitter.spawn_rate_while_active = 0.0;
+        config.emitter.spawn_rate_idle = 5.0; // 1 per step at most: 300
+        assert!(config.pool_warnings().is_empty(), "idle spawns at most one per step");
+        config.lifetime_max = 600.0; // past the clamp, but the estimate is plain arithmetic
+        assert_eq!(config.pool_warnings().len(), 1, "1 per step x 600 is over 500");
     }
 
     #[test]
