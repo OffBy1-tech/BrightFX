@@ -197,15 +197,30 @@ impl Simulation {
     ///
     /// A change clears the baked position: culling makes the pool depend
     /// on the bounds, so the next `seek` must replay from zero rather than
-    /// step forward from a pool built for another size. Setting the bounds
-    /// the simulation already has changes nothing and leaves it alone.
+    /// step forward from a pool built for another size. It also culls the
+    /// live pool against the new bounds now, so a render without a step
+    /// does not show particles the new frame would have dropped. Setting
+    /// the bounds the simulation already has changes nothing and leaves it
+    /// alone.
     pub fn set_bounds(&mut self, width: f32, height: f32) {
         let valid = width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0;
         let bounds = valid.then_some((width, height));
         if bounds != self.bounds {
             self.bounds = bounds;
             self.leave_baked();
+            self.recull();
         }
+    }
+
+    /// Applies the cull rule to the live pool at its current positions, so
+    /// a resize takes effect on what `buffer` already holds rather than at
+    /// the next step. A no-op when culling is off.
+    fn recull(&mut self) {
+        let (Some(margin), Some((w, h))) = (self.config.cull_margin, self.bounds) else {
+            return;
+        };
+        self.pool.retain_mut(|p| cull_keeps(p, margin, w, h));
+        self.rebuild_buffer();
     }
 
     /// The bounds `set_bounds` last accepted, in logical px.
@@ -284,11 +299,14 @@ impl Simulation {
 
     /// Drops the baked position, so the next `seek` replays from zero
     /// instead of stepping forward. The one place `baked` is cleared. By
-    /// convention -- nothing enforces it -- every host-facing call that
+    /// convention -- enforced by tests, not the compiler -- every host-facing call that
     /// changes simulation state calls this: `set_emitter`, `trigger_burst`,
     /// and `advance` before their own writes, `set_config` after swapping
     /// the config, and `reset`. A new such call must do the same, or a
     /// forward seek would step on from a state the track did not produce.
+    /// `every_public_mutator_is_known_to_this_suite` fails when a public
+    /// `&mut self` method is added, and `every_state_mutator_invalidates_forward_seek`
+    /// checks each listed one against a fresh seek.
     fn leave_baked(&mut self) {
         self.baked = None;
     }
@@ -476,19 +494,7 @@ impl Simulation {
             p.x += p.vx * fe;
             p.y += p.vy * fe;
             if let Some((margin, w, h)) = cull {
-                // A position that is not finite cannot be on screen, entered
-                // or not. (It is also never "inside", so it would otherwise
-                // be exempt, as a particle that has not entered yet.)
-                if !p.x.is_finite() || !p.y.is_finite() {
-                    return false;
-                }
-                if within_margin(p.x, p.y, margin, w, h) {
-                    p.entered = true;
-                } else if p.entered || moving_away(p, margin, w, h) {
-                    // Outside, and either it was inside before or it is
-                    // heading away from the rectangle. One that is outside
-                    // but moving toward the rectangle is an emitter placed
-                    // off-screen, and is kept so it can enter.
+                if !cull_keeps(p, margin, w, h) {
                     return false;
                 }
             }
@@ -647,6 +653,28 @@ impl Simulation {
                 color: [rgb[0], rgb[1], rgb[2], p.alpha],
             });
         }
+    }
+}
+
+/// The cull rule, applied after a particle's position is final. Marks the
+/// particle `entered` when it is inside the margin rectangle and returns
+/// whether it survives.
+///
+/// A position that is not finite cannot be on screen, entered or not. (It
+/// is also never "inside", so it would otherwise be exempt, as a particle
+/// that has not entered yet.) Outside the rectangle, a particle is culled
+/// if it was inside before or is heading away from it. One that is outside
+/// but moving toward the rectangle is an emitter placed off-screen, and is
+/// kept so it can enter.
+fn cull_keeps(p: &mut Particle, margin: f32, w: f32, h: f32) -> bool {
+    if !p.x.is_finite() || !p.y.is_finite() {
+        return false;
+    }
+    if within_margin(p.x, p.y, margin, w, h) {
+        p.entered = true;
+        true
+    } else {
+        !(p.entered || moving_away(p, margin, w, h))
     }
 }
 
@@ -2067,6 +2095,101 @@ mod tests {
         assert!(sim.baked.is_some());
         sim.set_bounds(100.0, 100.0);
         assert!(sim.baked.is_some(), "identical bounds cleared the cursor");
+    }
+
+    #[test]
+    fn shrinking_the_bounds_culls_the_live_pool_without_a_step() {
+        let mut sim = one_runner(Some(0.0));
+        sim.set_bounds(200.0, 100.0);
+        advance_steps(&mut sim, 5);
+        assert_eq!(sim.buffer().len(), 1, "test is vacuous: the runner left the frame");
+        assert!(sim.buffer()[0].x > 100.0, "test is vacuous: the runner is inside the smaller frame");
+
+        sim.set_bounds(100.0, 100.0);
+        assert_eq!(sim.particle_count(), 0, "a particle outside the new frame survived");
+        assert!(sim.buffer().is_empty(), "the buffer still shows it");
+    }
+
+    #[test]
+    fn growing_the_bounds_or_having_no_margin_culls_nothing() {
+        let mut sim = one_runner(Some(0.0));
+        sim.set_bounds(200.0, 100.0);
+        advance_steps(&mut sim, 3);
+        sim.set_bounds(400.0, 400.0);
+        assert_eq!(sim.particle_count(), 1);
+
+        let mut sim = one_runner(None);
+        sim.set_bounds(200.0, 100.0);
+        advance_steps(&mut sim, 5);
+        sim.set_bounds(100.0, 100.0);
+        assert_eq!(sim.particle_count(), 1, "no cullMargin, nothing to cull");
+    }
+
+    /// Every public `&mut self` method of `Simulation`, split by whether it
+    /// changes state outside `seek` (and so must clear the baked position).
+    const STATE_MUTATORS: [&str; 5] = ["set_config", "set_bounds", "set_emitter", "trigger_burst", "advance"];
+
+    #[test]
+    fn every_public_mutator_is_known_to_this_suite() {
+        // Fails when a `pub fn ... (&mut self` is added to `Simulation`,
+        // so its author has to add it to `STATE_MUTATORS` and to
+        // `every_state_mutator_invalidates_forward_seek` (or confirm it is
+        // `seek`, the only method allowed to keep the baked position).
+        let source = include_str!("simulation.rs");
+        let production = &source[..source.find("#[cfg(test)]").unwrap()];
+        let found: Vec<&str> = production
+            .lines()
+            .filter_map(|line| line.strip_prefix("    pub fn "))
+            .filter(|rest| rest.contains("(&mut self"))
+            .map(|rest| &rest[..rest.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap()])
+            .filter(|name| *name != "seek")
+            .collect();
+        let mut expected = STATE_MUTATORS.to_vec();
+        expected.sort_unstable();
+        let mut found = found;
+        found.sort_unstable();
+        assert_eq!(found, expected, "a public mutator is not covered by the forward-seek invalidation test");
+    }
+
+    #[test]
+    fn every_state_mutator_invalidates_forward_seek() {
+        let apply: [(&str, fn(&mut Simulation)); 5] = [
+            ("set_config", |sim| {
+                let mut config = sim.config().clone();
+                config.gravity_y += 3.0;
+                sim.set_config(config);
+            }),
+            ("set_bounds", |sim| sim.set_bounds(100.0, 100.0)),
+            ("set_emitter", |sim| sim.set_emitter(5.0, 5.0, 1.0, 1.0, true)),
+            ("trigger_burst", |sim| sim.trigger_burst()),
+            ("advance", |sim| sim.advance(TICK)),
+        ];
+        assert_eq!(apply.map(|(name, _)| name), STATE_MUTATORS, "keep this table in step with STATE_MUTATORS");
+
+        let make = || {
+            let mut config = culling_track_config();
+            config.cull_margin = Some(0.0);
+            Simulation::new(config, 5)
+        };
+        for (name, mutate) in apply {
+            // Reference: the mutation, then a seek from a cleared cursor.
+            let mut fresh = make();
+            fresh.seek(0.5);
+            fresh.leave_baked();
+            mutate(&mut fresh);
+            fresh.seek(0.8);
+
+            // Under test: seek, mutate, then seek forward, which steps on
+            // only if the mutator left the cursor in place.
+            let mut stepped = make();
+            stepped.seek(0.5);
+            assert!(stepped.baked.is_some(), "{name}: vacuous, no cursor to invalidate");
+            mutate(&mut stepped);
+            assert!(stepped.baked.is_none(), "{name} left the baked position in place");
+            stepped.seek(0.8);
+
+            assert_eq!(xy(&fresh), xy(&stepped), "{name}: forward seek differs from a fresh seek");
+        }
     }
 
     /// The seek fixture's burst at 0.5 s: 12 radial particles from about
