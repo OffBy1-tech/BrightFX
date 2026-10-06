@@ -21,7 +21,7 @@ import { BrightFX } from "brightfx-js";
 const engine = await BrightFX.init(source);      // URL/string (browser) or bytes (Node)
 const sim = engine.create(seed);                 // one Simulation per instance
 
-sim.setConfig(effectConfig);                     // -> {ok:true,clamped:[...]} | {ok:false,error}
+sim.setConfig(effectConfig);                     // -> {ok:true,clamped:[...],warnings:[...]} | {ok:false,error}
 sim.setViewport(width, height, scale);            // device pixels, and pixels per logical unit
 sim.setBounds(width, height);                    // logical px, for sprite hosts; setViewport sets it itself
 
