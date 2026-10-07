@@ -37,7 +37,7 @@ void bfx_simulation_free(struct BfxSimulation *sim);
 /**
  * Loads a JSON config. Returns an owned JSON envelope the caller must release
  * with `bfx_string_free`:
- * `{"ok":true,"clamped":[...]}` or `{"ok":false,"error":"..."}`.
+ * `{"ok":true,"clamped":[...],"warnings":[...]}` or `{"ok":false,"error":"..."}`.
  *
  * # Safety
  * `sim` must be a valid handle or NULL; `json` must be a NUL-terminated
@@ -127,7 +127,7 @@ bool bfx_is_poisoned(const struct BfxSimulation *sim);
  * Allocates the frame for a `width x height` device-pixel viewport at
  * `scale` device pixels per logical unit. Returns an owned envelope the
  * caller must release with `bfx_string_free`:
- * `{"ok":true,"clamped":[...]}` or `{"ok":false,"error":"..."}`.
+ * `{"ok":true,"clamped":[...],"warnings":[...]}` or `{"ok":false,"error":"..."}`.
  *
  * # Safety
  * `sim` must be a valid handle or NULL.

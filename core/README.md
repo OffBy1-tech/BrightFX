@@ -27,7 +27,7 @@ platforms from drifting apart.
 
 ```
 sim = new(seed)                       // starts from the default config
-set_config(json) -> envelope          // {"ok":true,"clamped":[...]} | {"ok":false,"error":"..."}
+set_config(json) -> envelope          // {"ok":true,"clamped":[...],"warnings":[...]} | {"ok":false,"error":"..."}
 
 // per frame
 set_emitter(x, y, vx, vy, active)

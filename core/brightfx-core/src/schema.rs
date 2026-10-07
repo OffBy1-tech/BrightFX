@@ -1,6 +1,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::particle::MAX_PARTICLES;
+
 /// The config schema version this build writes. Version 2 added the
 /// `random-palette` colour mode; version 3 the `capsule` shape and
 /// `spinDirection`; version 4 `cullMargin`. Nothing was renamed or removed,
@@ -262,6 +264,33 @@ pub struct ParticleFxConfig {
 }
 
 impl ParticleFxConfig {
+    /// Advisory warnings for a config that will overflow the particle
+    /// pool. The pool holds `MAX_PARTICLES` and evicts the oldest particle
+    /// when full, so a config whose worst-case population (the larger
+    /// effective spawn rate x the longest lifetime, plus one burst)
+    /// exceeds it can lose particles mid-life, silently. An upper bound
+    /// for a single burst: `cullMargin` removing particles early and
+    /// repeated bursts from a track or host are not modelled. Call after
+    /// `clamp_to_bounds`; the config is not changed.
+    pub fn pool_warnings(&self) -> Vec<String> {
+        // Idle emission is one particle at most per step, with probability
+        // `rate * 0.3` (see `Simulation::step`).
+        let idle = (self.emitter.spawn_rate_idle * 0.3).min(1.0);
+        let rate = self.emitter.spawn_rate_while_active.max(idle);
+        let peak = rate * self.lifetime_max + self.emitter.spawn_burst_size as f32;
+        if peak > MAX_PARTICLES as f32 {
+            vec![format!(
+                "particle pool: up to ~{} live particles (spawn rate {rate} x lifetimeMax {} + burst {}) \
+                 exceeds the pool of {MAX_PARTICLES}; the oldest are evicted mid-life",
+                peak.round(),
+                self.lifetime_max,
+                self.emitter.spawn_burst_size,
+            )]
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Clamps every numeric field with a documented valid range (per
     /// Mouseflare's original `fxEditor.ts` comments) into that range,
     /// tolerating out-of-range values from hand-edited JSON instead of
@@ -425,6 +454,29 @@ mod tests {
         assert_eq!(json["cullMargin"], 40.0);
         let back: ParticleFxConfig = serde_json::from_value(json).unwrap();
         assert_eq!(back.cull_margin, Some(40.0));
+    }
+
+    #[test]
+    fn pool_warnings_flag_rate_times_lifetime_plus_burst_over_the_pool() {
+        let mut config = ParticleFxConfig::default();
+        config.emitter.spawn_rate_while_active = 1.0;
+        config.emitter.spawn_burst_size = 0;
+        config.lifetime_max = 300.0;
+        assert!(config.pool_warnings().is_empty(), "300 is under 500");
+
+        config.emitter.spawn_rate_while_active = 1.7;
+        assert_eq!(config.pool_warnings().len(), 1, "510 is over 500");
+
+        // A burst alone can tip it over, and an idle rate counts too.
+        config.emitter.spawn_rate_while_active = 1.6; // 480
+        config.emitter.spawn_burst_size = 21;
+        assert_eq!(config.pool_warnings().len(), 1, "480 + 21 is over 500");
+        config.emitter.spawn_burst_size = 0;
+        config.emitter.spawn_rate_while_active = 0.0;
+        config.emitter.spawn_rate_idle = 5.0; // 1 per step at most: 300
+        assert!(config.pool_warnings().is_empty(), "idle spawns at most one per step");
+        config.lifetime_max = 600.0; // past the clamp, but the estimate is plain arithmetic
+        assert_eq!(config.pool_warnings().len(), 1, "1 per step x 600 is over 500");
     }
 
     #[test]

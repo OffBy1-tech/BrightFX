@@ -122,6 +122,7 @@ fn every_preset_loads_unclamped_and_emits() {
         let envelope: serde_json::Value = serde_json::from_str(&sim.set_config(&json)).unwrap();
         assert_eq!(envelope["ok"], true, "{name}: {envelope}");
         assert_eq!(envelope["clamped"].as_array().unwrap().len(), 0, "{name} needs clamping: {envelope}");
+        assert_eq!(envelope["warnings"].as_array().unwrap().len(), 0, "{name} warns: {envelope}");
         sim.seek(GOLDEN_TIME);
         assert!(sim.particle_count() > 0, "{name} produces no particles at t={GOLDEN_TIME}");
         let config: serde_json::Value = serde_json::from_str(&json).unwrap();
