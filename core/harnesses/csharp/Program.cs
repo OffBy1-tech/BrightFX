@@ -222,8 +222,8 @@ internal static class Program
         using var sim = new Simulation(expected.Seed);
 
         string smokeEnvelope = ApplyConfig(sim.Ptr, configJson, "config");
-        if (!smokeEnvelope.Contains("\"warnings\":["))
-            Fail($"the set_config envelope has no warnings field: {smokeEnvelope}");
+        if (!smokeEnvelope.Contains("particle pool"))
+            Fail($"the smoke config's worst case is over the pool, but set_config did not warn: {smokeEnvelope}");
 
         Drive(sim.Ptr, expected.EmitterFrames, expected.BurstFrame, expected.Dt);
         AssertBufferMatches(sim.Ptr, expected.ParticleCount, expected.ParticleFloats, expected.Buffer, expected.Tolerance);
@@ -322,6 +322,21 @@ internal static class Program
         uint left = Native.bfx_particle_count(cullSim.Ptr);
         if (left != 0) Fail($"bfx_set_bounds did not cull the live particles: {left} left");
         Console.WriteLine("  ok  bfx_set_bounds culls particles outside the new frame");
+
+        // set_config re-culls too. A 1000 margin around a 1 x 1 frame holds
+        // the particles (so this also shows bfx_set_bounds took effect:
+        // without bounds the later cull could not happen); margin 0 then
+        // drops them at once.
+        using var reCullSim = new Simulation(7);
+        ApplyConfig(reCullSim.Ptr, cullConfigJson.Replace("\"cullMargin\": 0.0", "\"cullMargin\": 1000.0"), "wide-margin config");
+        Native.bfx_set_bounds(reCullSim.Ptr, 1f, 1f);
+        Native.bfx_set_emitter(reCullSim.Ptr, 50f, 50f, 0f, 0f, true);
+        for (int i = 0; i < 5; i++) Native.bfx_advance(reCullSim.Ptr, expected.Dt);
+        if (Native.bfx_particle_count(reCullSim.Ptr) == 0) Fail("set_config cull check is vacuous: nothing held");
+        ApplyConfig(reCullSim.Ptr, cullConfigJson, "narrow-margin config");
+        uint reLeft = Native.bfx_particle_count(reCullSim.Ptr);
+        if (reLeft != 0) Fail($"set_config did not cull the live particles: {reLeft} left");
+        Console.WriteLine("  ok  set_config with a smaller cullMargin culls at once");
 
         string bad = Native.SetConfig(sim.Ptr, "{ not json");
         if (!bad.Contains("\"ok\":false")) Fail($"bad JSON was accepted: {bad}");

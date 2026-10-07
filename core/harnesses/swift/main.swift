@@ -142,8 +142,8 @@ func run() throws {
     guard let sim = bfx_simulation_new(expected.seed) else { throw Failure("bfx_simulation_new returned NULL") }
     defer { bfx_simulation_free(sim) }
     let smokeEnvelope = try applyConfig(sim, configJson, "config")
-    guard smokeEnvelope.contains("\"warnings\":[") else {
-        throw Failure("the set_config envelope has no warnings field: \(smokeEnvelope)")
+    guard smokeEnvelope.contains("particle pool") else {
+        throw Failure("the smoke config's worst case is over the pool, but set_config did not warn: \(smokeEnvelope)")
     }
     drive(sim, frames: expected.emitterFrames, burstFrame: expected.burstFrame, dt: expected.dt)
     try assertBufferMatches(
@@ -259,6 +259,22 @@ func run() throws {
         throw Failure("bfx_set_bounds did not cull the live particles: \(bfx_particle_count(cullSim)) left")
     }
     print("  ok  bfx_set_bounds culls particles outside the new frame")
+
+    // set_config re-culls too. A 1000 margin around a 1 x 1 frame holds the
+    // particles (so this also shows bfx_set_bounds took effect: without
+    // bounds the later cull could not happen); margin 0 then drops them at once.
+    guard let reCullSim = bfx_simulation_new(7) else { throw Failure("bfx_simulation_new returned NULL") }
+    defer { bfx_simulation_free(reCullSim) }
+    try applyConfig(reCullSim, cullConfigJson.replacingOccurrences(of: "\"cullMargin\": 0.0", with: "\"cullMargin\": 1000.0"), "wide-margin config")
+    bfx_set_bounds(reCullSim, 1, 1)
+    bfx_set_emitter(reCullSim, 50, 50, 0, 0, true)
+    for _ in 0..<5 { bfx_advance(reCullSim, expected.dt) }
+    guard bfx_particle_count(reCullSim) > 0 else { throw Failure("set_config cull check is vacuous: nothing held") }
+    try applyConfig(reCullSim, cullConfigJson, "narrow-margin config")
+    guard bfx_particle_count(reCullSim) == 0 else {
+        throw Failure("set_config did not cull the live particles: \(bfx_particle_count(reCullSim)) left")
+    }
+    print("  ok  set_config with a smaller cullMargin culls at once")
 
     // --- error handling -------------------------------------------------------
     let badPtr = "{ not json".withCString { bfx_set_config(sim, $0) }

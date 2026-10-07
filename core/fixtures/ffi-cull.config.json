@@ -3,7 +3,7 @@
   "id": "ffi-cull",
   "name": "ffi-cull",
   "category": "elemental",
-  "description": "Shared fixture for cross-target FFI determinism checks",
+  "description": "Culling and pool-warning checks in the FFI harnesses (no golden output): cullMargin 0, and a worst case over the 500-particle pool, so retuning the rate or lifetime must keep it over",
   "author": "Off By 1",
   "icon": "fire",
   "emitter": {

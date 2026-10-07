@@ -49,6 +49,11 @@ test("setConfig returns the envelope for objects and strings", () => {
     assert.equal(result.warnings.length, 1);
     assert.match(result.warnings[0], /particle pool/);
   }
+  // A config that fits the pool carries an empty list, not a missing field.
+  const small = JSON.parse(read("ffi-smoke.config.json"));
+  small.emitter.spawnRateWhileActive = 1;
+  small.emitter.spawnBurstSize = 0;
+  assert.deepEqual(sim.setConfig(small), { ok: true, clamped: [], warnings: [] });
   const bad = sim.setConfig("{ not json");
   assert.equal(bad.ok, false);
   assert.match(bad.error, /invalid JSON/);

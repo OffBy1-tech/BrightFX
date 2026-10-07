@@ -179,6 +179,10 @@ impl Simulation {
         }
     }
 
+    /// Swaps the config. Live particles keep their state, except that the
+    /// cull rule is re-applied to them at once, so a smaller `cullMargin`
+    /// takes effect without waiting for a step. Any config does this, not
+    /// only one that changes the margin, and the cull is permanent.
     pub fn set_config(&mut self, config: ParticleFxConfig) {
         self.palette = build_palette(&config);
         self.baked_track = build_baked_track(&config);
@@ -186,8 +190,8 @@ impl Simulation {
         // Live particles keep their state (that is the boundary's contract),
         // but the track may have changed, so the next seek replays.
         self.leave_baked();
-        // A new `cullMargin` applies to what is already there, so a render
-        // without a step does not show particles the new config would drop.
+        // The (possibly new) `cullMargin` applies to what is already there,
+        // so a render without a step does not show particles it would drop.
         self.recull();
     }
 
@@ -2040,6 +2044,7 @@ mod tests {
         config.cull_margin = Some(5.0);
         sim.set_config(config);
         assert_eq!(sim.particle_count(), 0);
+        assert!(sim.buffer().is_empty(), "the buffer still shows it before any step");
     }
 
     #[test]
