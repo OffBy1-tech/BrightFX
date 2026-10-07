@@ -59,13 +59,15 @@ struct Failure: Error, CustomStringConvertible {
 
 /// Applies a config, releasing the Rust-owned envelope, and fails unless it
 /// was accepted.
-func applyConfig(_ sim: OpaquePointer, _ json: String, _ label: String) throws {
+@discardableResult
+func applyConfig(_ sim: OpaquePointer, _ json: String, _ label: String) throws -> String {
     guard let envelopePtr = json.withCString({ bfx_set_config(sim, $0) }) else {
         throw Failure("bfx_set_config returned NULL for \(label)")
     }
     let envelope = String(cString: envelopePtr)
     bfx_string_free(envelopePtr)
     guard envelope.contains("\"ok\":true") else { throw Failure("\(label) rejected: \(envelope)") }
+    return envelope
 }
 
 /// Replays the emitter states the fixture recorded, one advance per frame,
@@ -139,7 +141,10 @@ func run() throws {
     // --- driving protocol -----------------------------------------------------
     guard let sim = bfx_simulation_new(expected.seed) else { throw Failure("bfx_simulation_new returned NULL") }
     defer { bfx_simulation_free(sim) }
-    try applyConfig(sim, configJson, "config")
+    let smokeEnvelope = try applyConfig(sim, configJson, "config")
+    guard smokeEnvelope.contains("\"warnings\":[") else {
+        throw Failure("the set_config envelope has no warnings field: \(smokeEnvelope)")
+    }
     drive(sim, frames: expected.emitterFrames, burstFrame: expected.burstFrame, dt: expected.dt)
     try assertBufferMatches(
         sim, count: expected.particleCount, stride: expected.particleFloats,
@@ -232,6 +237,29 @@ func run() throws {
     }
     print("  ok  the render protocol reproduces the Rust frame")
 
+    // --- culling and warnings ---------------------------------------------------
+    // No viewport here (sprite mode): bfx_set_bounds is the only way to give
+    // cullMargin a frame. The config also overflows the particle pool, which
+    // set_config reports as a warning without rejecting it.
+    let cullConfigJson = try text("ffi-cull.config.json")
+    guard let cullSim = bfx_simulation_new(7) else { throw Failure("bfx_simulation_new returned NULL") }
+    defer { bfx_simulation_free(cullSim) }
+    let cullEnvelope = try applyConfig(cullSim, cullConfigJson, "cull config")
+    guard cullEnvelope.contains("particle pool") else {
+        throw Failure("a config that overflows the pool carried no warning: \(cullEnvelope)")
+    }
+    print("  ok  set_config warns about a pool overflow and still accepts the config")
+
+    bfx_set_bounds(cullSim, 200, 200)
+    bfx_set_emitter(cullSim, 50, 50, 0, 0, true)
+    for _ in 0..<5 { bfx_advance(cullSim, expected.dt) }
+    guard bfx_particle_count(cullSim) > 0 else { throw Failure("cull check is vacuous: nothing spawned") }
+    bfx_set_bounds(cullSim, 1, 1)
+    guard bfx_particle_count(cullSim) == 0 else {
+        throw Failure("bfx_set_bounds did not cull the live particles: \(bfx_particle_count(cullSim)) left")
+    }
+    print("  ok  bfx_set_bounds culls particles outside the new frame")
+
     // --- error handling -------------------------------------------------------
     let badPtr = "{ not json".withCString { bfx_set_config(sim, $0) }
     guard let badPtr else { throw Failure("bfx_set_config returned NULL for bad input") }
@@ -246,6 +274,7 @@ func run() throws {
     }
     bfx_advance(nil, 0.016)
     bfx_seek(nil, 1.0)
+    bfx_set_bounds(nil, 100, 100)
     guard bfx_frame_len(nil) == 0, bfx_frame_ptr(nil) == nil else { throw Failure("null handle was not tolerated by frame accessors") }
     bfx_render(nil)
     bfx_simulation_free(nil)
