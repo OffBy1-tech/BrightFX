@@ -106,7 +106,10 @@ void bfx_seek(struct BfxSimulation *sim,
 /**
  * Start of the particle buffer: `bfx_particle_count() * bfx_particle_floats()`
  * contiguous floats. Returns NULL for a NULL handle. Valid until the next
- * `bfx_advance`, `bfx_seek`, or `bfx_trigger_burst`.
+ * `bfx_advance`, `bfx_seek`, or `bfx_trigger_burst`, or a `bfx_set_config`,
+ * `bfx_set_bounds` or `bfx_set_viewport` that culls live particles at once
+ * (a new `cullMargin`, or a changed size). Re-read `bfx_particle_count`
+ * after any of them.
  *
  * # Safety
  * `sim` must be a valid handle or NULL.

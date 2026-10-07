@@ -182,7 +182,8 @@ impl AbiSimulation {
     /// previous config stays in place and the simulation keeps rendering.
     ///
     /// Success does *not* reset the simulation: live particles keep their
-    /// state and the new config applies from the next frame on. That is what
+    /// state and the new config applies from the next frame on (except that
+    /// a new `cullMargin` culls the live particles at once). That is what
     /// makes live parameter editing usable; re-seeding is `seek(0)`'s job.
     ///
     /// It does clear the baked position, because the new config may carry
@@ -287,8 +288,8 @@ impl AbiSimulation {
     /// `particle_count() * PARTICLE_FLOATS` values.
     ///
     /// Valid until the next `advance`, `seek`, `trigger_burst`, or a
-    /// `set_bounds`/`set_viewport` that changes the size (it culls live
-    /// particles at once). The
+    /// `set_config`/`set_bounds`/`set_viewport` that culls live particles
+    /// at once (a new `cullMargin`, or a changed size). The
     /// address itself is stable for the life of the simulation (the buffer is
     /// preallocated), but hosts on WASM must still re-read it after
     /// `set_config`, which can grow linear memory and detach existing views.

@@ -21,6 +21,7 @@ internal static class Native
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] internal static extern void bfx_set_emitter(
         IntPtr sim, float x, float y, float vx, float vy,
         [MarshalAs(UnmanagedType.I1)] bool active);
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] internal static extern void bfx_set_bounds(IntPtr sim, float width, float height);
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] internal static extern void bfx_trigger_burst(IntPtr sim);
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] internal static extern void bfx_advance(IntPtr sim, float dt);
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] internal static extern void bfx_seek(IntPtr sim, float time);
@@ -154,10 +155,11 @@ internal static class Program
     }
 
     /// Applies a config and fails unless it was accepted.
-    private static void ApplyConfig(IntPtr sim, string json, string label)
+    private static string ApplyConfig(IntPtr sim, string json, string label)
     {
         string envelope = Native.SetConfig(sim, json);
         if (!envelope.Contains("\"ok\":true")) Fail($"{label} rejected: {envelope}");
+        return envelope;
     }
 
     /// Compares the live particle buffer against a recorded one within tolerance.
@@ -219,7 +221,9 @@ internal static class Program
 
         using var sim = new Simulation(expected.Seed);
 
-        ApplyConfig(sim.Ptr, configJson, "config");
+        string smokeEnvelope = ApplyConfig(sim.Ptr, configJson, "config");
+        if (!smokeEnvelope.Contains("particle pool"))
+            Fail($"the smoke config's worst case is over the pool, but set_config did not warn: {smokeEnvelope}");
 
         Drive(sim.Ptr, expected.EmitterFrames, expected.BurstFrame, expected.Dt);
         AssertBufferMatches(sim.Ptr, expected.ParticleCount, expected.ParticleFloats, expected.Buffer, expected.Tolerance);
@@ -299,6 +303,41 @@ internal static class Program
             Fail($"{differing} pixels drifted beyond {frameExpected.ChannelTolerance} per channel");
         Console.WriteLine("  ok  the render protocol reproduces the Rust frame");
 
+        // --- culling and warnings ---
+        // No viewport here (sprite mode): bfx_set_bounds is the only way to
+        // give cullMargin a frame. The config also overflows the particle
+        // pool, which set_config reports as a warning without rejecting it.
+        string cullConfigJson = File.ReadAllText(Path.Combine(fixtures, "ffi-cull.config.json"));
+        using var cullSim = new Simulation(7);
+        string cullEnvelope = ApplyConfig(cullSim.Ptr, cullConfigJson, "cull config");
+        if (!cullEnvelope.Contains("particle pool"))
+            Fail($"a config that overflows the pool carried no warning: {cullEnvelope}");
+        Console.WriteLine("  ok  set_config warns about a pool overflow and still accepts the config");
+
+        Native.bfx_set_bounds(cullSim.Ptr, 200f, 200f);
+        Native.bfx_set_emitter(cullSim.Ptr, 50f, 50f, 0f, 0f, true);
+        for (int i = 0; i < 5; i++) Native.bfx_advance(cullSim.Ptr, expected.Dt);
+        if (Native.bfx_particle_count(cullSim.Ptr) == 0) Fail("cull check is vacuous: nothing spawned");
+        Native.bfx_set_bounds(cullSim.Ptr, 1f, 1f);
+        uint left = Native.bfx_particle_count(cullSim.Ptr);
+        if (left != 0) Fail($"bfx_set_bounds did not cull the live particles: {left} left");
+        Console.WriteLine("  ok  bfx_set_bounds culls particles outside the new frame");
+
+        // set_config re-culls too. A 1000 margin around a 1 x 1 frame holds
+        // the particles (so this also shows bfx_set_bounds took effect:
+        // without bounds the later cull could not happen); margin 0 then
+        // drops them at once.
+        using var reCullSim = new Simulation(7);
+        ApplyConfig(reCullSim.Ptr, cullConfigJson.Replace("\"cullMargin\": 0.0", "\"cullMargin\": 1000.0"), "wide-margin config");
+        Native.bfx_set_bounds(reCullSim.Ptr, 1f, 1f);
+        Native.bfx_set_emitter(reCullSim.Ptr, 50f, 50f, 0f, 0f, true);
+        for (int i = 0; i < 5; i++) Native.bfx_advance(reCullSim.Ptr, expected.Dt);
+        if (Native.bfx_particle_count(reCullSim.Ptr) == 0) Fail("set_config cull check is vacuous: nothing held");
+        ApplyConfig(reCullSim.Ptr, cullConfigJson, "narrow-margin config");
+        uint reLeft = Native.bfx_particle_count(reCullSim.Ptr);
+        if (reLeft != 0) Fail($"set_config did not cull the live particles: {reLeft} left");
+        Console.WriteLine("  ok  set_config with a smaller cullMargin culls at once");
+
         string bad = Native.SetConfig(sim.Ptr, "{ not json");
         if (!bad.Contains("\"ok\":false")) Fail($"bad JSON was accepted: {bad}");
         Console.WriteLine("  ok  an invalid config is rejected with a message, not a crash");
@@ -307,6 +346,7 @@ internal static class Program
         if (Native.bfx_buffer_ptr(IntPtr.Zero) != IntPtr.Zero) Fail("null handle was not tolerated");
         Native.bfx_advance(IntPtr.Zero, 0.016f);
         Native.bfx_seek(IntPtr.Zero, 1.0f);
+        Native.bfx_set_bounds(IntPtr.Zero, 100f, 100f);
         Native.bfx_simulation_free(IntPtr.Zero);
         Native.bfx_string_free(IntPtr.Zero);
         if (Native.bfx_frame_len(IntPtr.Zero) != 0) Fail("null handle was not tolerated by bfx_frame_len");

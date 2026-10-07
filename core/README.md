@@ -46,12 +46,13 @@ read frame_len() bytes at frame_ptr()             // premultiplied RGBA8, stride
 Notes that matter:
 
 - `set_config` succeeds atomically and keeps live particles; the new config
-  applies from the next frame. It also clears the baked position, so the
+  applies from the next frame (a new `cullMargin` culls live particles at
+  once). It also clears the baked position, so the
   next `seek` replays from t=0. Re-seed with `seek(0)`.
 - **A rejected config changes nothing.** The previous config stays loaded.
 - **The buffer pointer is stable** for the life of a simulation, but its
-  *contents* are only valid until the next `advance`/`seek`/`trigger_burst`, or a `set_bounds`/`set_viewport`
-  that changes the size (it culls live particles at once).
+  *contents* are only valid until the next `advance`/`seek`/`trigger_burst`, or a `set_config`/`set_bounds`/
+  `set_viewport` that culls live particles at once.
 - **On WASM, `set_config` can detach your `Float32Array`.** Read through the
   `readBuffer` helper in `harnesses/node/brightfx.mjs`, which rebuilds the
   view when linear memory has moved.

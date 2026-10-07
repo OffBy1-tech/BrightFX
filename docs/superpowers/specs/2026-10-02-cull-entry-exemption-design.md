@@ -64,7 +64,8 @@ removes both problems.
   permanent.
 - Turning culling on mid-run (bounds going from none to set, or `set_config`
   adding `cullMargin`) culls live particles that are already outside and moving
-  away on the next step. Live particles outside and moving toward the
+  away (at once for `set_bounds` and `set_config` since #26/#29; the first
+  version waited for the next step). Live particles outside and moving toward the
   rectangle are kept.
 
 ### State and determinism
