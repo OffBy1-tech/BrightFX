@@ -40,8 +40,20 @@ function assertClose(actual, expected, tolerance, label) {
 
 test("setConfig returns the envelope for objects and strings", () => {
   const sim = engine.create(1);
-  assert.deepEqual(sim.setConfig(read("ffi-smoke.config.json")), { ok: true, clamped: [], warnings: [] });
-  assert.deepEqual(sim.setConfig(JSON.parse(read("ffi-smoke.config.json"))), { ok: true, clamped: [], warnings: [] });
+  // The fixture's worst case (10/step x 60 + a burst of 20) is over the
+  // 500-particle pool, so it carries one advisory warning.
+  for (const input of [read("ffi-smoke.config.json"), JSON.parse(read("ffi-smoke.config.json"))]) {
+    const result = sim.setConfig(input);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.clamped, []);
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0], /particle pool/);
+  }
+  // A config that fits the pool carries an empty list, not a missing field.
+  const small = JSON.parse(read("ffi-smoke.config.json"));
+  small.emitter.spawnRateWhileActive = 1;
+  small.emitter.spawnBurstSize = 0;
+  assert.deepEqual(sim.setConfig(small), { ok: true, clamped: [], warnings: [] });
   const bad = sim.setConfig("{ not json");
   assert.equal(bad.ok, false);
   assert.match(bad.error, /invalid JSON/);
