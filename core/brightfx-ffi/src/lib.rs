@@ -84,6 +84,21 @@ pub unsafe extern "C" fn bfx_set_emitter(
     }
 }
 
+/// Sets the logical-unit rectangle `[0, width] x [0, height]` that the
+/// config's `cullMargin` is measured from, for a host with no viewport
+/// (sprite mode). `bfx_set_viewport` sets it itself. A non-finite or
+/// non-positive dimension clears it, and with no bounds nothing is culled.
+/// Culls the live particles against the new bounds immediately.
+///
+/// # Safety
+/// `sim` must be a valid handle or NULL.
+#[no_mangle]
+pub unsafe extern "C" fn bfx_set_bounds(sim: *mut BfxSimulation, width: f32, height: f32) {
+    if let Some(sim) = sim.as_mut() {
+        sim.inner.set_bounds(width, height);
+    }
+}
+
 /// # Safety
 /// `sim` must be a valid handle or NULL.
 #[no_mangle]
@@ -109,8 +124,8 @@ pub unsafe extern "C" fn bfx_advance(sim: *mut BfxSimulation, dt: f32) {
 /// `time` has fired and the simulation may sit up to one step past it: a
 /// seek at or after the previous one steps forward
 /// from it, and any other call sequence -- a backward seek, or any
-/// `bfx_advance`, `bfx_trigger_burst`, `bfx_set_emitter`, or
-/// `bfx_set_config` since -- replays from t=0, giving the same buffer
+/// `bfx_advance`, `bfx_trigger_burst`, `bfx_set_emitter`,
+/// `bfx_set_bounds` (with a new size), or `bfx_set_config` since -- replays from t=0, giving the same buffer
 /// either way.
 ///
 /// # Safety
@@ -316,6 +331,7 @@ mod tests {
         unsafe { bfx_advance(std::ptr::null_mut(), 0.016) };
         unsafe { bfx_seek(std::ptr::null_mut(), 1.0) };
         unsafe { bfx_trigger_burst(std::ptr::null_mut()) };
+        unsafe { bfx_set_bounds(std::ptr::null_mut(), 100.0, 100.0) };
         unsafe { bfx_simulation_free(std::ptr::null_mut()) };
         // Documented safe on NULL like the rest; hosts free envelopes they
         // may have received as NULL.
@@ -340,6 +356,27 @@ mod tests {
         let envelope =
             envelope_from(unsafe { bfx_set_config(sim, invalid.as_ptr() as *const c_char) });
         assert_eq!(envelope["ok"], false);
+        unsafe { bfx_simulation_free(sim) };
+    }
+
+    #[test]
+    fn bounds_activate_cull_margin_for_a_host_with_no_viewport() {
+        let config = brightfx_core::ParticleFxConfig { cull_margin: Some(0.0), ..Default::default() };
+        let config = CString::new(serde_json::to_string(&config).unwrap()).unwrap();
+        let sim = bfx_simulation_new(42);
+        envelope_from(unsafe { bfx_set_config(sim, config.as_ptr()) });
+
+        // Inside a 200 x 200 frame the particles enter it and stay.
+        unsafe { bfx_set_bounds(sim, 200.0, 200.0) };
+        unsafe { bfx_set_emitter(sim, 50.0, 50.0, 0.0, 0.0, true) };
+        for _ in 0..5 {
+            unsafe { bfx_advance(sim, 0.015625) };
+        }
+        assert!(unsafe { bfx_particle_count(sim) } > 0, "test is vacuous: nothing spawned");
+
+        // Shrinking the frame culls them at once, with no step in between.
+        unsafe { bfx_set_bounds(sim, 1.0, 1.0) };
+        assert_eq!(unsafe { bfx_particle_count(sim) }, 0);
         unsafe { bfx_simulation_free(sim) };
     }
 

@@ -286,7 +286,9 @@ impl AbiSimulation {
     /// Start of the particle buffer, as a flat `f32` array of
     /// `particle_count() * PARTICLE_FLOATS` values.
     ///
-    /// Valid until the next `advance`, `seek`, or `trigger_burst`. The
+    /// Valid until the next `advance`, `seek`, `trigger_burst`, or a
+    /// `set_bounds`/`set_viewport` that changes the size (it culls live
+    /// particles at once). The
     /// address itself is stable for the life of the simulation (the buffer is
     /// preallocated), but hosts on WASM must still re-read it after
     /// `set_config`, which can grow linear memory and detach existing views.
