@@ -31,7 +31,8 @@ exactly once.
     and the simulation may sit up to one step (1/60 s) past `time`. A
     seek at or after the previous seek's step applies only the steps in
     between; any other call sequence (a backward seek, or any `advance`,
-    `trigger_burst`, `set_emitter`, or `set_config` since) resets and
+    `trigger_burst`, `set_emitter`, `set_config`, or a `set_bounds` that changes
+    the size since) resets and
     replays from t=0. Both paths run the same whole steps, so the buffer
     is a pure function of `time`. No-op without a track.
 
@@ -166,10 +167,10 @@ rectangle in a single step lands on the far side moving outward, so it is
 culled too. A particle whose position is not finite is always culled.
 
 `set_bounds` takes logical px; a non-finite or non-positive size clears the
-bounds. The C API has no `bfx_set_bounds`, so a C host gets bounds only through
-`bfx_set_viewport`, and `cullMargin` is inert for a C host that never sets a
-viewport. If a host calls both `set_viewport` and `set_bounds`, the last call
-wins.
+bounds. A C host without a viewport calls `bfx_set_bounds`. Changing the
+bounds also culls the live pool at once, by the same rule, and permanently:
+growing the bounds again does not bring particles back. If a host calls both
+`set_viewport` and `set_bounds`, the last call wins.
 
 ## Color modes
 
