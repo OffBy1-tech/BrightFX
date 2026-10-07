@@ -199,7 +199,10 @@ impl Simulation {
     /// on the bounds, so the next `seek` must replay from zero rather than
     /// step forward from a pool built for another size. It also culls the
     /// live pool against the new bounds now, so a render without a step
-    /// does not show particles the new frame would have dropped. Setting
+    /// does not show particles the new frame would have dropped. That is
+    /// permanent: growing the bounds again does not bring them back, so a
+    /// transient small size (a host measuring a container twice) costs
+    /// the particles outside it. Setting
     /// the bounds the simulation already has changes nothing and leaves it
     /// alone.
     pub fn set_bounds(&mut self, width: f32, height: f32) {
@@ -216,11 +219,23 @@ impl Simulation {
     /// a resize takes effect on what `buffer` already holds rather than at
     /// the next step. A no-op when culling is off.
     fn recull(&mut self) {
-        let (Some(margin), Some((w, h))) = (self.config.cull_margin, self.bounds) else {
+        let Some((margin, w, h)) = self.cull_rule() else {
             return;
         };
-        self.pool.retain_mut(|p| cull_keeps(p, margin, w, h));
-        self.rebuild_buffer();
+        let before = self.pool.len();
+        self.pool.retain_mut(|p| apply_cull(p, margin, w, h));
+        if self.pool.len() != before {
+            self.rebuild_buffer();
+        }
+    }
+
+    /// `(margin, width, height)` when culling is active: the author asked
+    /// for it (`cullMargin`) and the host said how big the frame is.
+    fn cull_rule(&self) -> Option<(f32, f32, f32)> {
+        match (self.config.cull_margin, self.bounds) {
+            (Some(margin), Some((w, h))) => Some((margin, w, h)),
+            _ => None,
+        }
     }
 
     /// The bounds `set_bounds` last accepted, in logical px.
@@ -302,7 +317,7 @@ impl Simulation {
     /// convention -- enforced by tests, not the compiler -- every host-facing call that
     /// changes simulation state calls this: `set_emitter`, `trigger_burst`,
     /// and `advance` before their own writes, `set_config` after swapping
-    /// the config, and `reset`. A new such call must do the same, or a
+    /// the config, `set_bounds` when the size changes, and `reset`. A new such call must do the same, or a
     /// forward seek would step on from a state the track did not produce.
     /// `every_public_mutator_is_known_to_this_suite` fails when a public
     /// `&mut self` method is added, and `every_state_mutator_invalidates_forward_seek`
@@ -454,10 +469,7 @@ impl Simulation {
 
         // Only culls when the author asked for it and the host said how big
         // the frame is.
-        let cull = match (self.config.cull_margin, self.bounds) {
-            (Some(margin), Some((w, h))) => Some((margin, w, h)),
-            _ => None,
-        };
+        let cull = self.cull_rule();
         self.pool.retain_mut(|p| {
             p.life += fe;
             if p.life >= p.max_life {
@@ -494,7 +506,7 @@ impl Simulation {
             p.x += p.vx * fe;
             p.y += p.vy * fe;
             if let Some((margin, w, h)) = cull {
-                if !cull_keeps(p, margin, w, h) {
+                if !apply_cull(p, margin, w, h) {
                     return false;
                 }
             }
@@ -656,9 +668,10 @@ impl Simulation {
     }
 }
 
-/// The cull rule, applied after a particle's position is final. Marks the
-/// particle `entered` when it is inside the margin rectangle and returns
-/// whether it survives.
+/// The cull rule, applied after a particle's position is final. Returns
+/// whether the particle survives, and as a side effect marks it `entered`
+/// when it is inside the margin rectangle -- so call it once per position,
+/// never as a dry-run query.
 ///
 /// A position that is not finite cannot be on screen, entered or not. (It
 /// is also never "inside", so it would otherwise be exempt, as a particle
@@ -666,7 +679,7 @@ impl Simulation {
 /// if it was inside before or is heading away from it. One that is outside
 /// but moving toward the rectangle is an emitter placed off-screen, and is
 /// kept so it can enter.
-fn cull_keeps(p: &mut Particle, margin: f32, w: f32, h: f32) -> bool {
+fn apply_cull(p: &mut Particle, margin: f32, w: f32, h: f32) -> bool {
     if !p.x.is_finite() || !p.y.is_finite() {
         return false;
     }
@@ -2111,6 +2124,28 @@ mod tests {
     }
 
     #[test]
+    fn recull_follows_the_entered_and_moving_away_rules() {
+        // A runner that has not entered the frame is kept while it heads
+        // toward it and culled once it heads away; one inside the new
+        // frame is kept and marked entered.
+        let mut sim = one_runner(Some(0.0));
+        sim.set_bounds(10.0, 10.0); // the runner sits around (60, 50), right of it
+        assert_eq!(sim.particle_count(), 0, "outside and moving away (right) should go");
+
+        let mut sim = one_runner(Some(0.0));
+        sim.pool.retain_mut(|p| {
+            p.vx = -10.0; // now heading back toward a frame to its left
+            true
+        });
+        sim.set_bounds(10.0, 100.0);
+        assert_eq!(sim.particle_count(), 1, "outside but moving toward the frame must stay");
+        assert!(sim.pool.iter().all(|p| !p.entered));
+
+        sim.set_bounds(200.0, 100.0);
+        assert!(sim.pool.iter().all(|p| p.entered), "inside the new frame, not marked entered");
+    }
+
+    #[test]
     fn growing_the_bounds_or_having_no_margin_culls_nothing() {
         let mut sim = one_runner(Some(0.0));
         sim.set_bounds(200.0, 100.0);
@@ -2137,16 +2172,23 @@ mod tests {
         // `seek`, the only method allowed to keep the baked position).
         let source = include_str!("simulation.rs");
         let production = &source[..source.find("#[cfg(test)]").unwrap()];
-        let found: Vec<&str> = production
-            .lines()
-            .filter_map(|line| line.strip_prefix("    pub fn "))
-            .filter(|rest| rest.contains("(&mut self"))
-            .map(|rest| &rest[..rest.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap()])
-            .filter(|name| *name != "seek")
-            .collect();
+        // Whitespace-collapsed, so a signature the formatter wrapped over
+        // several lines is still one `pub fn ... (&mut self ...)` run.
+        let flat = production.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut found: Vec<&str> = Vec::new();
+        for (start, _) in flat.match_indices("pub ") {
+            let rest = &flat[start + 4..];
+            let rest = rest.trim_start_matches("const ").trim_start_matches("unsafe ");
+            let Some(rest) = rest.strip_prefix("fn ") else { continue };
+            let end = rest.find(|c| c == '{' || c == ';').unwrap_or(rest.len());
+            let (name, signature) = (&rest[..rest.find('(').unwrap()], &rest[..end]);
+            if signature.contains("&mut self") || signature.contains("self: &mut") {
+                found.push(name);
+            }
+        }
+        found.retain(|name| *name != "seek");
         let mut expected = STATE_MUTATORS.to_vec();
         expected.sort_unstable();
-        let mut found = found;
         found.sort_unstable();
         assert_eq!(found, expected, "a public mutator is not covered by the forward-seek invalidation test");
     }
