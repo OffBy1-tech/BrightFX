@@ -186,6 +186,9 @@ impl Simulation {
         // Live particles keep their state (that is the boundary's contract),
         // but the track may have changed, so the next seek replays.
         self.leave_baked();
+        // A new `cullMargin` applies to what is already there, so a render
+        // without a step does not show particles the new config would drop.
+        self.recull();
     }
 
     /// Sets the logical-pixel rectangle `[0, width] x [0, height]` that
@@ -216,8 +219,8 @@ impl Simulation {
     }
 
     /// Applies the cull rule to the live pool at its current positions, so
-    /// a resize takes effect on what `buffer` already holds rather than at
-    /// the next step. A no-op when culling is off.
+    /// a resize or a new `cullMargin` takes effect on what `buffer` already
+    /// holds rather than at the next step. A no-op when culling is off.
     fn recull(&mut self) {
         let Some((margin, w, h)) = self.cull_rule() else {
             return;
@@ -2015,8 +2018,28 @@ mod tests {
 
         config.cull_margin = Some(0.0);
         sim.set_config(config);
-        sim.advance(TICK);
         assert_eq!(sim.particle_count(), 0, "a particle already outside survived");
+        assert!(sim.buffer().is_empty(), "the buffer still shows it before any step");
+    }
+
+    #[test]
+    fn a_smaller_cull_margin_culls_the_live_pool_at_once() {
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 1.0;
+        config.initial_speed_min = 10.0;
+        config.initial_speed_max = 10.0;
+        config.cull_margin = Some(500.0);
+        let mut sim = Simulation::new(config.clone(), 7);
+        sim.set_bounds(100.0, 100.0);
+        sim.set_emitter(50.0, 50.0, 0.0, 0.0, true);
+        sim.advance(TICK);
+        sim.set_emitter(50.0, 50.0, 0.0, 0.0, false);
+        advance_steps(&mut sim, 10); // x about 160: past the frame, inside the margin
+        assert_eq!(sim.particle_count(), 1, "test is vacuous: the margin did not hold it");
+
+        config.cull_margin = Some(5.0);
+        sim.set_config(config);
+        assert_eq!(sim.particle_count(), 0);
     }
 
     #[test]
