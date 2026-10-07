@@ -46,12 +46,18 @@ compile_error!(
      panic = \"abort\", which voids the FFI boundary's panic containment"
 );
 
-/// `{"ok":true,"clamped":["glowRadius"]}`
+/// `{"ok":true,"clamped":["glowRadius"],"warnings":[]}`
 ///
 /// Built with `serde_json` rather than string concatenation so field names
 /// and messages are escaped correctly.
 pub(crate) fn ok_envelope(clamped: &[&'static str]) -> String {
-    serde_json::json!({ "ok": true, "clamped": clamped }).to_string()
+    ok_envelope_with_warnings(clamped, &[])
+}
+
+/// As `ok_envelope`, with advisory `warnings`: things the config will do
+/// that the host may not want, reported without rejecting or changing it.
+pub(crate) fn ok_envelope_with_warnings(clamped: &[&'static str], warnings: &[String]) -> String {
+    serde_json::json!({ "ok": true, "clamped": clamped, "warnings": warnings }).to_string()
 }
 
 /// Parses a config the way `set_config` does: JSON syntax, then the
@@ -169,8 +175,10 @@ impl AbiSimulation {
 
     /// Parses, version-checks, clamps, and applies a config.
     ///
-    /// Returns a JSON envelope: `{"ok":true,"clamped":[...]}` on success, or
-    /// `{"ok":false,"error":"..."}` on failure. Failure is atomic — the
+    /// Returns a JSON envelope: `{"ok":true,"clamped":[...],"warnings":[...]}`
+    /// on success, or `{"ok":false,"error":"..."}` on failure. `warnings`
+    /// are advisory (the config is applied as given), e.g. a spawn rate
+    /// that will overflow the particle pool. Failure is atomic — the
     /// previous config stays in place and the simulation keeps rendering.
     ///
     /// Success does *not* reset the simulation: live particles keep their
@@ -192,8 +200,9 @@ impl AbiSimulation {
             Err(message) => return err_envelope(&message),
         };
         let clamped = config.clamp_to_bounds();
+        let warnings = config.pool_warnings();
         sim.set_config(config);
-        ok_envelope(&clamped)
+        ok_envelope_with_warnings(&clamped, &warnings)
     }
 
     /// Test accessor for the atomic-rejection test; also handy for hosts
@@ -298,7 +307,7 @@ impl AbiSimulation {
 
     /// Allocates the frame for a `width x height` device-pixel viewport at
     /// `scale` device pixels per logical unit. Returns an envelope like
-    /// `set_config`: `{"ok":true,"clamped":[...]}` with any of
+    /// `set_config`: `{"ok":true,"clamped":[...],"warnings":[]}` with any of
     /// `viewport.width`, `viewport.height`, `viewport.scale`, or
     /// `{"ok":false,"error":"..."}` for a zero dimension.
     ///
@@ -497,11 +506,24 @@ mod tests {
     }
 
     #[test]
+    fn a_config_that_overflows_the_pool_is_applied_with_a_warning() {
+        let mut config = ParticleFxConfig { lifetime_min: 300.0, lifetime_max: 300.0, ..Default::default() };
+        config.emitter.spawn_rate_while_active = 5.0;
+        let mut sim = AbiSimulation::new(42);
+        let value = parse(&sim.set_config(&serde_json::to_string(&config).unwrap()));
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["clamped"].as_array().unwrap().len(), 0);
+        assert_eq!(value["warnings"].as_array().unwrap().len(), 1);
+        assert!(value["warnings"][0].as_str().unwrap().contains("particle pool"));
+    }
+
+    #[test]
     fn a_valid_config_is_accepted_with_nothing_clamped() {
         let mut sim = AbiSimulation::new(42);
         let value = parse(&sim.set_config(&valid_config_json()));
         assert_eq!(value["ok"], true);
         assert_eq!(value["clamped"].as_array().unwrap().len(), 0);
+        assert_eq!(value["warnings"].as_array().unwrap().len(), 0);
     }
 
     #[test]
@@ -849,6 +871,7 @@ mod tests {
             let value = parse(&sim.set_viewport(64, 48, 1.0));
             assert_eq!(value["ok"], true);
             assert_eq!(value["clamped"].as_array().unwrap().len(), 0);
+            assert_eq!(value["warnings"].as_array().unwrap().len(), 0);
 
             let value = parse(&sim.set_viewport(64, 48, 100.0));
             assert_eq!(value["ok"], true);

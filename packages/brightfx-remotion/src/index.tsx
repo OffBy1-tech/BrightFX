@@ -117,6 +117,7 @@ export function useBrightFX(
         if (result.clamped.length > 0) {
           console.warn(`BrightFX clamped ${result.clamped.length} value(s): ${result.clamped.join(", ")}`);
         }
+        for (const warning of result.warnings ?? []) console.warn(`BrightFX: ${warning}`);
         if (viewportWidth > 0 && viewportHeight > 0) {
           const v = created.setViewport(viewportWidth, viewportHeight, 1);
           if (!v.ok) throw new Error(`BrightFX viewport rejected: ${v.error}`);

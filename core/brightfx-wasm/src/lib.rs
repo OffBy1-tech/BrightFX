@@ -21,7 +21,7 @@ impl BrightFx {
     }
 
     /// Loads a JSON config. Returns the JSON envelope as a string:
-    /// `{"ok":true,"clamped":[...]}` or `{"ok":false,"error":"..."}`.
+    /// `{"ok":true,"clamped":[...],"warnings":[...]}` or `{"ok":false,"error":"..."}`.
     ///
     /// This allocates, which can grow linear memory and detach any existing
     /// `Float32Array` view over the particle buffer. Callers must rebuild

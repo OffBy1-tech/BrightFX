@@ -10,7 +10,7 @@
 
 import init, { BrightFx, fitTrack, generateCueTracks, particleFloats, wasmMemory } from "../wasm/brightfx_wasm.js";
 
-export type ConfigResult = { ok: true; clamped: string[] } | { ok: false; error: string };
+export type ConfigResult = { ok: true; clamped: string[]; warnings: string[] } | { ok: false; error: string };
 
 export interface Particle {
   x: number;

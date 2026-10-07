@@ -73,7 +73,9 @@ frame-equivalent quantity (see the crate's `simulation.rs` module docs) —
 
 - The particle pool has a fixed capacity of 500 (`MAX_PARTICLES`) with FIFO
   eviction — when full, the oldest particle is dropped to make room for a
-  new spawn.
+  new spawn. `set_config` reports a config that will overflow it (larger
+  spawn rate x `lifetimeMax`, plus a burst) in the envelope's `warnings`
+  array, without changing the config.
 - `ParticleFxConfig.sound_on_spawn` is passthrough data the core never reads;
   sound is host behavior.
 - `seed` (passed to `Simulation::new`) only takes effect through `reset()`
