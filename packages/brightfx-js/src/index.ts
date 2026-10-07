@@ -258,7 +258,7 @@ export class Simulation {
 
   /** A view over the live particle buffer, `particleFloats()` floats per
    *  particle. Valid until the next `seek`/`advance`/`triggerBurst`/
-   *  `setConfig`; never cache it. */
+   *  `setConfig`/`setBounds`/`setViewport`; never cache it. */
   particles(): Float32Array {
     const sim = this.sim;
     // Count, floats, ptr, then memory: same rule as `frame()` -- any
