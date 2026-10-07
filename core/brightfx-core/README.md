@@ -15,7 +15,8 @@ exactly once.
 - `Simulation` — the runtime engine.
   - `Simulation::new(config, seed) -> Simulation`
   - `set_config(config)` — hot-swaps parameters; live particles keep
-    simulating, new spawns use the new config.
+    simulating, new spawns use the new config. Also re-applies the cull
+    rule to the live pool at once (see Culling), which is permanent.
   - `set_emitter(x, y, vx, vy, active)` — **live mode**: call once per host
     tick before `advance`, with `active` reflecting whether continuous
     emission should be running (e.g. mouse currently moving, or a game
@@ -170,8 +171,9 @@ culled too. A particle whose position is not finite is always culled.
 
 `set_bounds` takes logical px; a non-finite or non-positive size clears the
 bounds. A C host without a viewport calls `bfx_set_bounds`. Changing the
-bounds also culls the live pool at once, by the same rule, and permanently:
-growing the bounds again does not bring particles back. If a host calls both
+bounds, or `set_config` with any config, also culls the live pool at once, by
+the same rule, and permanently: growing the bounds or restoring a larger
+`cullMargin` does not bring particles back. If a host calls both
 `set_viewport` and `set_bounds`, the last call wins.
 
 ## Color modes
