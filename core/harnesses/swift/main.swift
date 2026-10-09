@@ -197,6 +197,37 @@ func run() throws {
         buffer: forwardFloats, tolerance: 0)
     print("  ok  forward seeks reproduce the Rust buffer and match a fresh seek exactly")
 
+    // --- pre-roll protocol -----------------------------------------------------
+    let prerollConfigJson = try text("ffi-preroll.config.json")
+    let prerollExpected: SeekExpectation = try decode("ffi-preroll.expected.json")
+    guard prerollExpected.particleCount > 0, prerollExpected.seekTimes.count == 1, prerollExpected.seekTimes[0] == 0 else {
+        throw Failure("pre-roll fixture is vacuous or does not record seek(0)")
+    }
+
+    guard let prerollSim = bfx_simulation_new(prerollExpected.seed) else { throw Failure("bfx_simulation_new returned NULL") }
+    defer { bfx_simulation_free(prerollSim) }
+    try applyConfig(prerollSim, prerollConfigJson, "pre-roll config")
+    for time in prerollExpected.seekTimes { bfx_seek(prerollSim, time) }
+    try assertBufferMatches(
+        prerollSim, count: prerollExpected.particleCount, stride: prerollExpected.particleFloats,
+        buffer: prerollExpected.buffer, tolerance: prerollExpected.tolerance)
+
+    // Leaving the pre-roll is a forward seek: bit-identical to a fresh one.
+    bfx_seek(prerollSim, 0.5)
+    let prerollCount = bfx_particle_count(prerollSim)
+    guard let prerollBase = bfx_buffer_ptr(prerollSim) else { throw Failure("bfx_buffer_ptr returned NULL") }
+    let prerollFloats = Array(
+        UnsafeBufferPointer(start: prerollBase, count: Int(prerollCount * prerollExpected.particleFloats)))
+
+    guard let prerollFresh = bfx_simulation_new(prerollExpected.seed) else { throw Failure("bfx_simulation_new returned NULL") }
+    defer { bfx_simulation_free(prerollFresh) }
+    try applyConfig(prerollFresh, prerollConfigJson, "pre-roll fresh config")
+    bfx_seek(prerollFresh, 0.5)
+    try assertBufferMatches(
+        prerollFresh, count: prerollCount, stride: prerollExpected.particleFloats,
+        buffer: prerollFloats, tolerance: 0)
+    print("  ok  a pre-rolled track is already running at t=0 and steps on bit-identically")
+
     // --- frame protocol --------------------------------------------------------
     let frameConfigJson = try text("ffi-frame.config.json")
     let frameExpected: FrameExpectation = try decode("ffi-frame.expected.json")

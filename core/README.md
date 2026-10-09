@@ -111,6 +111,12 @@ guards simulation drift; the fixtures guard boundary drift.
   buffer and then requires a fresh `seek` to the last time to be
   bit-identical — the property that lets a forward seek step instead of
   replay.
+- `fixtures/ffi-preroll.*`: a track whose timeline starts 1 s before t=0
+  (`emitterTrack.preroll`, schema version 5) with a StartContinuous and a
+  burst at negative times, recorded at `seek(0)`: the pool the pre-roll
+  built. Each harness reproduces it, then seeks the same handle on to
+  0.5 s and requires that to be bit-identical to a fresh seek, which is
+  the forward path leaving the pre-roll.
 - `fixtures/tracks-cues.*`: the lyric-cue generator's input and recorded
   jobs. Rust records; the Node harness runs the same input through the
   wasm build and requires the identical bytes, which is what keeps one
@@ -147,7 +153,7 @@ After an intentional simulation change, regenerate the particle fixtures
 (and the cue fixture too if the change touched track serialization):
 
 ```bash
-BRIGHTFX_REGENERATE=1 cargo test -p brightfx-core --test ffi_fixture --test seek_fixture --test seek_forward_fixture
+BRIGHTFX_REGENERATE=1 cargo test -p brightfx-core --test ffi_fixture --test seek_fixture --test seek_forward_fixture --test preroll_fixture
 BRIGHTFX_REGENERATE=1 cargo test -p brightfx-tracks --test cues_fixture
 ```
 
