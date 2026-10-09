@@ -24,6 +24,8 @@ const seekExpected = JSON.parse(readFileSync(join(fixtures, "ffi-seek.expected.j
 const seekForwardExpected = JSON.parse(
   readFileSync(join(fixtures, "ffi-seek-forward.expected.json"), "utf8"),
 );
+const prerollConfigJson = readFileSync(join(fixtures, "ffi-preroll.config.json"), "utf8");
+const prerollExpected = JSON.parse(readFileSync(join(fixtures, "ffi-preroll.expected.json"), "utf8"));
 
 const cueInputJson = readFileSync(join(fixtures, "tracks-cues.input.json"), "utf8");
 const cueExpectedText = readFileSync(join(fixtures, "tracks-cues.expected.json"), "utf8");
@@ -109,6 +111,28 @@ test("forward seeks reproduce the Rust buffer and match a fresh seek exactly", (
   assert.deepStrictEqual(freshFloats, forwardFloats);
   fresh.free();
   forward.free();
+});
+
+test("a pre-rolled track is already running at t=0 and steps on bit-identically", () => {
+  assert.ok(prerollExpected.particleCount > 0, "pre-roll fixture is vacuous");
+  assert.deepEqual(prerollExpected.seekTimes, [0], "the pre-roll fixture records seek(0)");
+  const sim = new mod.BrightFx(BigInt(prerollExpected.seed));
+  applyConfig(sim, prerollConfigJson);
+  for (const time of prerollExpected.seekTimes) sim.seek(time);
+  assertBufferMatches(sim, prerollExpected);
+
+  // Leaving the pre-roll is a forward seek: bit-identical to a fresh one.
+  sim.seek(0.5);
+  const fresh = new mod.BrightFx(BigInt(prerollExpected.seed));
+  applyConfig(fresh, prerollConfigJson);
+  fresh.seek(0.5);
+  const forwardFloats = Array.from(readBuffer(sim, mod));
+  const freshFloats = Array.from(readBuffer(fresh, mod));
+  assert.ok(forwardFloats.every(Number.isFinite), "forward buffer is not finite");
+  assert.ok(freshFloats.every(Number.isFinite), "fresh buffer is not finite");
+  assert.deepStrictEqual(freshFloats, forwardFloats);
+  sim.free();
+  fresh.free();
 });
 
 // Drives a simulation to a state with live particles, for the detachment
@@ -288,10 +312,10 @@ test("fitTrack refuses a missing dimension instead of writing null keyframes", (
 });
 
 test("fitTrack applies the same schemaVersion gate as setConfig", () => {
-  const config = { ...JSON.parse(seekConfigJson), schemaVersion: 5 };
+  const config = { ...JSON.parse(seekConfigJson), schemaVersion: 999 };
   const envelope = JSON.parse(mod.fitTrack(JSON.stringify(config), 1920, 1080, 1080, 1920));
   assert.equal(envelope.ok, false);
-  assert.match(envelope.error, /unsupported schemaVersion 5/);
+  assert.match(envelope.error, /unsupported schemaVersion 999/);
 });
 
 console.log("node harness: all checks passed");
