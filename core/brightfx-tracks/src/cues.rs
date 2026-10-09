@@ -103,6 +103,7 @@ pub struct EffectJob {
 fn static_track(at: Point, duration: f32, triggers: Vec<EmitterTrigger>) -> EmitterTrack {
     EmitterTrack {
         duration,
+        preroll: 0.0,
         keyframes: vec![EmitterKeyframe { time: 0.0, x: at.x, y: at.y, vx: Some(0.0), vy: Some(0.0) }],
         triggers,
     }

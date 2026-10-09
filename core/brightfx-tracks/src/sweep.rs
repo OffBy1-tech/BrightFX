@@ -65,6 +65,7 @@ pub fn sweep_track(a: (f32, f32), b: (f32, f32), period: f32, duration: f32) -> 
     }
     EmitterTrack {
         duration,
+        preroll: 0.0,
         keyframes,
         triggers: vec![EmitterTrigger { time: 0.0, kind: TriggerKind::StartContinuous }],
     }

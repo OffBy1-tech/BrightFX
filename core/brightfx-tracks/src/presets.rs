@@ -106,6 +106,7 @@ fn scatter_sweep(y_min: f32, y_max: f32, leg: f32) -> EmitterTrack {
     }
     EmitterTrack {
         duration: TRACK_DURATION,
+        preroll: 0.0,
         keyframes,
         triggers: vec![EmitterTrigger { time: 0.0, kind: TriggerKind::StartContinuous }],
     }
