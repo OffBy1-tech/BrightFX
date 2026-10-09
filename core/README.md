@@ -35,7 +35,7 @@ advance(dt)
 read particle_count() * particle_floats() floats at buffer_ptr()
 
 // scrubbing (requires an emitterTrack in the config)
-seek(time)                           // baked mode; forward seeks step from the last seek
+seek(time)                           // baked mode; forward seeks step from the last seek; runs emitterTrack.preroll before t=0
 
 // drawing
 set_viewport(width, height, scale) -> envelope    // device pixels, and pixels per logical unit
@@ -48,7 +48,7 @@ Notes that matter:
 - `set_config` succeeds atomically and keeps live particles; the new config
   applies from the next frame (a new `cullMargin` culls live particles at
   once). It also clears the baked position, so the
-  next `seek` replays from t=0. Re-seed with `seek(0)`.
+  next `seek` replays from the start of the track (its `preroll` before t=0). Re-seed with `seek(0)`.
 - **A rejected config changes nothing.** The previous config stays loaded.
 - **The buffer pointer is stable** for the life of a simulation, but its
   *contents* are only valid until the next `advance`/`seek`/`trigger_burst`, or a `set_config`/`set_bounds`/

@@ -46,6 +46,12 @@ export interface EmitterTrigger {
 
 export interface EmitterTrack {
   duration: number;
+  /** Schema version 5+. Seconds the timeline runs before t=0, so `seek(0)`
+   *  returns the pool after that much playback instead of an empty one.
+   *  Keyframes and triggers may be authored at negative times down to
+   *  `-preroll`. Omitted means 0. The pre-roll is simulated, never
+   *  rendered: `seek` still clamps its time at 0. */
+  preroll?: number;
   keyframes: EmitterKeyframe[];
   triggers: EmitterTrigger[];
 }
