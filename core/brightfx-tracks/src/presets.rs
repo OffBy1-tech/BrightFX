@@ -95,7 +95,7 @@ const RAIN_EDGE: f32 = 20.0;
 /// pre-roll moves the pseudo-random path; nothing depends on where it is.
 fn scatter_sweep(y_min: f32, y_max: f32, leg: f32, preroll: f32) -> EmitterTrack {
     let leg = leg.max(PLAYBACK_STEP);
-    let preroll = crate::sweep::sanitize_preroll(preroll);
+    let preroll = brightfx_core::sanitize_preroll(preroll);
     let before = if preroll > 0.0 { crate::sweep::leg_count(preroll, leg) + 1 } else { 0 };
     let count = before + crate::sweep::leg_count(TRACK_DURATION, leg) + 1;
     let mut keyframes = Vec::with_capacity(count);
