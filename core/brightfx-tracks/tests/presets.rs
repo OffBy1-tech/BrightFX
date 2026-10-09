@@ -130,13 +130,15 @@ fn every_preset_loads_unclamped_and_emits() {
             config["emitterTrack"]["duration"], MAX_EMITTER_TRACK_DURATION,
             "{name}: track must run the full cap"
         );
-        // One trigger, at 0, and nothing after it: a second trigger (a
-        // stop, a burst) would let the track decide when the preset shows,
-        // which is the composition's job.
+        // One trigger, at the start of the pre-roll, and nothing after it:
+        // a second trigger (a stop, a burst) would let the track decide
+        // when the preset shows, which is the composition's job.
+        let preroll = config["emitterTrack"]["preroll"].as_f64().unwrap() as f32;
+        assert_eq!(preroll, config["lifetimeMax"].as_f64().unwrap() as f32 / 60.0, "{name}: pre-roll is one lifetime");
         let triggers = config["emitterTrack"]["triggers"].as_array().unwrap();
         assert_eq!(triggers.len(), 1, "{name}: expected exactly one trigger, got {triggers:?}");
         assert_eq!(triggers[0]["kind"], "startContinuous", "{name}: must start continuous");
-        assert_eq!(triggers[0]["time"], 0.0, "{name}: must start at 0");
+        assert_eq!(triggers[0]["time"].as_f64().unwrap() as f32, -preroll, "{name}: must start at -preroll");
     }
 }
 
@@ -223,6 +225,7 @@ struct Census {
     visible_deaths: Vec<(f32, f32, f32)>,
     deaths: usize,
     pool_peak: usize,
+    pool_min: usize,
 }
 
 /// Steps a preset one `PLAYBACK_STEP` at a time and finds its deaths.
@@ -250,11 +253,12 @@ fn census(config: ParticleFxConfig, w: f32, h: f32, bounded: bool) -> Census {
     };
     let mut prev = snapshot(&sim);
     let mut velocity: Vec<Option<[f32; 2]>> = vec![None; prev.len()];
-    let mut census = Census { visible_deaths: Vec::new(), deaths: 0, pool_peak: prev.len() };
+    let mut census = Census { visible_deaths: Vec::new(), deaths: 0, pool_peak: prev.len(), pool_min: prev.len() };
     for step in 1..=STEADY_STEPS {
         sim.seek((start + step) as f32 * PLAYBACK_STEP);
         let next = snapshot(&sim);
         census.pool_peak = census.pool_peak.max(next.len());
+        census.pool_min = census.pool_min.min(next.len());
         let mut next_velocity = Vec::with_capacity(next.len());
         let mut j = 0;
         for (i, p) in prev.iter().enumerate() {
@@ -318,6 +322,38 @@ fn at_steady_state_every_preset_leaves_pool_headroom() {
                 let fitted = fit_track(config.clone(), (FRAME_W, FRAME_H), (w, h)).unwrap();
                 let peak = census(fitted, w, h, bounded).pool_peak;
                 assert!(peak <= limit, "{name} {w}x{h} bounded={bounded}: pool peaked at {peak}, over {limit} ({MAX_PARTICLES} less {POOL_HEADROOM} headroom)");
+            }
+        }
+    }
+}
+
+/// #19: a composition that shows a preset in its first seconds must not
+/// get an empty frame filling up. With `preroll` of one lifetime the pool
+/// at t=0 is a sample of the steady state, so its size sits inside the
+/// range the census sees from 9 s on. The band is widened by a tenth at
+/// each end: the count fluctuates with the emitter's path, and 180 steps
+/// is a short look at it. A miss by more than that means the pre-roll is
+/// wrong, not the band.
+#[test]
+fn at_time_zero_every_preset_is_already_at_steady_state() {
+    for (name, config) in library() {
+        for (w, h) in [(FRAME_W, FRAME_H), (FRAME_H, FRAME_W)] {
+            for bounded in [false, true] {
+                let fitted = fit_track(config.clone(), (FRAME_W, FRAME_H), (w, h)).unwrap();
+                let steady = census(fitted.clone(), w, h, bounded);
+                let mut sim = Simulation::new(fitted, 7);
+                if bounded {
+                    sim.set_bounds(w, h);
+                }
+                sim.seek(0.0);
+                let at_zero = sim.particle_count() as usize;
+                let low = steady.pool_min * 9 / 10;
+                let high = steady.pool_peak * 11 / 10;
+                assert!(
+                    (low..=high).contains(&at_zero),
+                    "{name} {w}x{h} bounded={bounded}: {at_zero} particles at t=0, steady state holds {}..={}",
+                    steady.pool_min, steady.pool_peak
+                );
             }
         }
     }
