@@ -4,6 +4,7 @@ use crate::rng::Rng;
 use crate::schema::{
     ColorMode, SpinDirection, EmissionPattern, EmitterKeyframe, ParticleFxConfig, TriggerKind,
     MAX_EMITTER_TRACK_DURATION,
+    sanitize_preroll,
 };
 use std::sync::Arc;
 
@@ -38,6 +39,19 @@ fn grid_tolerance(target: f32) -> f64 {
     GRID_TOLERANCE_ABS + GRID_TOLERANCE_REL * target as f64
 }
 
+/// The same snap-then-ceil rule as `grid_step`, applied to a signed value
+/// in f64: -0.5 s maps to -30 and -0.49 s to -29 (the grid point at or
+/// after). Trigger times before t=0 resolve through this.
+fn signed_grid_step(target: f32) -> i64 {
+    let steps = target as f64 * GRID_RATE;
+    let nearest = steps.round();
+    if (steps - nearest).abs() <= grid_tolerance(target.abs()) {
+        nearest as i64
+    } else {
+        steps.ceil() as i64
+    }
+}
+
 /// The grid step a baked time maps to: the grid point *at or after*
 /// `target`. Computed in f64 so the f32 rounding of `target` itself is
 /// the only error -- a time within a few of its own ULPs of a grid point
@@ -55,20 +69,17 @@ fn grid_tolerance(target: f32) -> f64 {
 /// has fired. What a downward snap does move is the particle state, which
 /// then sits slightly *before* `target` -- see `seek`.
 fn grid_step(target: f32) -> u32 {
-    let steps = target as f64 * GRID_RATE;
-    let nearest = steps.round();
-    if (steps - nearest).abs() <= grid_tolerance(target) {
-        nearest as u32
-    } else {
-        steps.ceil() as u32
-    }
+    // Saturates, as the old f64-to-u32 `as` cast did: a plain `as u32` on
+    // the i64 would truncate, wrapping a huge time back onto the track.
+    u32::try_from(signed_grid_step(target.max(0.0))).unwrap_or(u32::MAX)
 }
 
 /// One of the track's triggers with the step it fires in resolved ahead
-/// of time: `fire_step` is the grid step at or after its authored time,
-/// so the trigger fires in the step that *ends* there -- exactly the
-/// step `seek` runs to reach that time. `0` means it fires at the reset,
-/// before any step runs.
+/// of time: `fire_step` is the absolute grid step at or after its authored
+/// time (`preroll_steps` plus the signed step of the time), so the trigger
+/// fires in the step that *ends* there -- exactly the step `seek` runs to
+/// reach that time. `0` means it fires at the reset, before any step runs,
+/// which is where a trigger at or before `-preroll` lands.
 #[derive(Debug, Clone, Copy)]
 struct BakedTrigger {
     fire_step: u32,
@@ -88,6 +99,13 @@ struct BakedTrack {
     triggers: Vec<BakedTrigger>,
     /// `duration`, floored at 0 and capped at `MAX_EMITTER_TRACK_DURATION`.
     duration_cap: f32,
+    /// `preroll`, floored at 0, capped at `MAX_PREROLL`, 0 if not finite.
+    preroll: f32,
+    /// Whole grid steps the timeline runs before authored t=0. Step
+    /// indices are absolute: 0 is the start of the pre-roll and
+    /// `preroll_steps` is t=0, so a `fire_step` or a `baked` cursor of
+    /// `preroll_steps` means "at t=0".
+    preroll_steps: u32,
 }
 
 /// One particle's render state. `#[repr(C)]` is load-bearing: hosts read
@@ -139,9 +157,11 @@ pub struct Simulation {
     emitter_speed: f32,
     emitter_active: bool,
     buffer: Vec<ParticleInstance>,
-    /// Whole steps applied since the last reset in baked mode. `None`
+    /// Absolute whole steps applied since the last reset in baked mode
+    /// (step 0 is the start of the pre-roll, see
+    /// `BakedTrack::preroll_steps`). `None`
     /// whenever the pool is not the product of a pure replay, so the next
-    /// `seek` replays from zero. Only `seek` sets it; everything else
+    /// `seek` replays from the start of the track. Only `seek` sets it; everything else
     /// clears it through `leave_baked`.
     baked: Option<u32>,
     /// Logical-pixel size of the rectangle `[0, w] x [0, h]` that
@@ -203,7 +223,7 @@ impl Simulation {
     /// (sprite mode) calls it with its container size.
     ///
     /// A change clears the baked position: culling makes the pool depend
-    /// on the bounds, so the next `seek` must replay from zero rather than
+    /// on the bounds, so the next `seek` must replay from the start of the track rather than
     /// step forward from a pool built for another size. It also culls the
     /// live pool against the new bounds now, so a render without a step
     /// does not show particles the new frame would have dropped. That is
@@ -319,8 +339,8 @@ impl Simulation {
         &self.config.name
     }
 
-    /// Drops the baked position, so the next `seek` replays from zero
-    /// instead of stepping forward. The one place `baked` is cleared. By
+    /// Drops the baked position, so the next `seek` replays from the start of the track
+    /// (its pre-roll before t=0) instead of stepping forward. The one place `baked` is cleared. By
     /// convention -- enforced by tests, not the compiler -- every host-facing call that
     /// changes simulation state calls this: `set_emitter`, `trigger_burst`,
     /// and `advance` before their own writes, `set_config` after swapping
@@ -366,9 +386,15 @@ impl Simulation {
     /// Triggers are unaffected (see `grid_step`). In practice only NTSC
     /// rates hit this, late in a track; the crate README has the onsets.
     ///
+    /// With `emitterTrack.preroll` set, the replay starts that many seconds
+    /// before t=0 (`preroll_steps` whole steps in front of the grid), so
+    /// `seek(0)` returns the pool those steps built. `time` is still
+    /// clamped at 0: the pre-roll is simulated, never rendered.
+    ///
     /// If the last call was a seek to an earlier or equal grid step, only
     /// the steps in between are applied; otherwise the simulation resets
-    /// and replays from t=0. Both paths run the same whole steps from a
+    /// and replays from the start of the track (its pre-roll before t=0).
+    /// Both paths run the same whole steps from a
     /// reset, so the buffer is a pure function of `time` regardless of
     /// call history. A no-op (empty buffer) if the config has no
     /// `emitter_track`.
@@ -383,9 +409,11 @@ impl Simulation {
 
         // `duration_cap` bounds the loop: a caller-supplied `time` (a
         // corrupt project file, a UI bug, ...) can't drive an unbounded
-        // number of synchronous step iterations.
+        // number of synchronous step iterations. The pre-roll adds at most
+        // `grid_step(MAX_PREROLL)` steps in front; it is simulated, never
+        // rendered, so `time` still clamps at 0.
         let target = time.max(0.0).min(track.duration_cap);
-        let n = grid_step(target);
+        let n = track.preroll_steps + grid_step(target);
 
         // On the forward path the `active` the loop starts from is
         // `self.emitter_active` as the previous seek left it. That is
@@ -400,12 +428,16 @@ impl Simulation {
         };
 
         for k in from..n {
-            // Grid times are computed from the step index, never
-            // accumulated, so step k is the same on every path. The
-            // sample is clamped to the duration so the final step of an
-            // off-grid track does not extrapolate past the last keyframe
-            // window.
-            let t_next = ((k + 1) as f32 * PLAYBACK_STEP).min(track.duration_cap);
+            // Grid times are computed from the absolute step index, never
+            // accumulated, so step k is the same on every path. Authored
+            // time is the index less the pre-roll, negative inside it; a
+            // negative product is the exact negation of the positive one,
+            // so a track with no pre-roll gets today's values bit for bit.
+            // The sample is clamped to the duration so the final step of
+            // an off-grid track does not extrapolate past the last
+            // keyframe window.
+            let authored = (k + 1) as i64 - track.preroll_steps as i64;
+            let t_next = (authored as f32 * PLAYBACK_STEP).min(track.duration_cap);
 
             let (x, y, vx, vy) = sample_track(&track.keyframes, t_next);
             // Update position/velocity for this step before evaluating
@@ -422,13 +454,16 @@ impl Simulation {
         self.baked = Some(n);
     }
 
-    /// Resets and fires the track's `fire_step == 0` triggers -- those
-    /// authored at (or within tolerance of) t=0. Baked playback requires
-    /// an explicit `StartContinuous` (or a `Burst`) to spawn anything --
-    /// unlike live mode, seek never implicitly emits from t=0.
+    /// Resets at the start of the timeline (`-preroll`, which is t=0 when
+    /// there is no pre-roll) and fires the `fire_step == 0` triggers --
+    /// those authored at or before the start. Baked playback requires an
+    /// explicit `StartContinuous` (or a `Burst`) to spawn anything --
+    /// unlike live mode, seek never implicitly emits from t=0. The emitter
+    /// is placed at `-preroll` exactly, while the first step's grid time is
+    /// the grid point at or after it (off-grid, up to a step earlier).
     fn restart_track(&mut self, track: &BakedTrack) {
         self.reset();
-        let (x0, y0, vx0, vy0) = sample_track(&track.keyframes, 0.0);
+        let (x0, y0, vx0, vy0) = sample_track(&track.keyframes, -track.preroll);
         self.place_emitter(x0, y0, vx0, vy0, false);
         self.fire_triggers(track, 0);
     }
@@ -806,24 +841,50 @@ fn build_palette(config: &ParticleFxConfig) -> Palette {
 fn build_baked_track(config: &ParticleFxConfig) -> Option<Arc<BakedTrack>> {
     let track = config.emitter_track.as_ref()?;
 
-    let mut triggers = track.triggers.clone();
-    triggers.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
-    // `grid_step` is monotonic in its argument, so chronological order is
-    // also fire-step order.
-    let triggers = triggers
-        .iter()
-        .map(|trig| BakedTrigger { fire_step: grid_step(trig.time.max(0.0)), kind: trig.kind })
-        .collect();
-
-    // `clamp_to_bounds` enforces this range for well-behaved hosts, but
+    // `clamp_to_bounds` enforces these ranges for well-behaved hosts, but
     // `Simulation` can be built directly from unvalidated JSON, so the
-    // ceiling must hold regardless. `max`/`min` rather than `clamp`: a
+    // ceilings must hold regardless. `max`/`min` rather than `clamp`: a
     // NaN duration must collapse to 0.0 here, and `clamp` would
     // propagate it.
     #[allow(clippy::manual_clamp)]
     let duration_cap = track.duration.max(0.0).min(MAX_EMITTER_TRACK_DURATION);
+    let preroll = sanitize_preroll(track.preroll);
+    let preroll_steps = grid_step(preroll);
 
-    Some(Arc::new(BakedTrack { keyframes: track.keyframes.clone(), triggers, duration_cap }))
+    // `sample_track` assumes ascending time, and the authoring order is
+    // free (a pre-roll keyframe is naturally appended after the t >= 0
+    // ones). A stable sort, like the triggers'.
+    let mut keyframes = track.keyframes.clone();
+    keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut triggers = track.triggers.clone();
+    // A NaN time makes the partial-order sort non-transitive and would fire
+    // at t=0; a non-finite trigger has no step.
+    triggers.retain(|t| t.time.is_finite());
+    triggers.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+    // `signed_grid_step` is monotonic in its argument, so chronological
+    // order is also fire-step order. A trigger at or before the start of
+    // the pre-roll fires at the reset, exactly, rather than through the
+    // grid arithmetic: `-preroll` need not sit on the grid, and a
+    // generator puts its StartContinuous there.
+    let triggers = triggers
+        .iter()
+        .map(|trig| {
+            let fire_step = if trig.time <= -preroll {
+                0
+            } else {
+                // Saturating, like `grid_step`: an unclamped time near
+                // `i64::MAX` steps must neither overflow the add nor wrap
+                // back onto the track.
+                (preroll_steps as i64)
+                    .saturating_add(signed_grid_step(trig.time))
+                    .clamp(0, u32::MAX as i64) as u32
+            };
+            BakedTrigger { fire_step, kind: trig.kind }
+        })
+        .collect();
+
+    Some(Arc::new(BakedTrack { keyframes, triggers, duration_cap, preroll, preroll_steps }))
 }
 
 #[cfg(test)]
@@ -1152,6 +1213,7 @@ mod tests {
         config.emitter.spawn_burst_size = 1;
         config.emitter_track = Some(EmitterTrack {
             duration: 1.0,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 1.0, x: 60.0, y: 0.0, vx: Some(60.0), vy: Some(0.0) },
@@ -1200,6 +1262,214 @@ mod tests {
             floats.iter().map(|f| f.to_bits()).collect()
         };
         assert_eq!(bits(&fresh), bits(&rewound));
+    }
+
+    /// Every float of the buffer as bits, read as the flat floats a host
+    /// sees. "Bit-identical" compares these: f32 `==` holds for -0.0 against
+    /// +0.0 and the harnesses compare bitwise. Finite first, since identical
+    /// NaNs share bits.
+    fn buffer_bits(sim: &Simulation) -> Vec<u32> {
+        let buffer = sim.buffer();
+        let len = std::mem::size_of_val(buffer) / std::mem::size_of::<f32>();
+        // SAFETY: `ParticleInstance` is `#[repr(C)]` and all `f32` (its
+        // stride is asserted at compile time), so this is `len`
+        // initialized, aligned f32s.
+        let floats = unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<f32>(), len) };
+        assert!(floats.iter().all(|f| f.is_finite()), "buffer contains NaN or inf");
+        floats.iter().map(|f| f.to_bits()).collect()
+    }
+
+    /// The same effect two ways: authored from `-preroll` with that
+    /// pre-roll, or with every time moved `shift` later and no pre-roll.
+    /// `x0`/`x1` are the emitter's x at the first and last keyframe; equal
+    /// values park it, so sampling the path costs no float rounding.
+    fn prerolled_config(preroll: f32, shift: f32, x0: f32, x1: f32) -> ParticleFxConfig {
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 2.0;
+        config.emitter.spawn_burst_size = 3;
+        config.lifetime_min = 100.0;
+        config.lifetime_max = 100.0;
+        config.emitter_track = Some(EmitterTrack {
+            duration: 1.0 + shift,
+            preroll,
+            keyframes: vec![
+                EmitterKeyframe { time: -0.5 + shift, x: x0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+                EmitterKeyframe { time: 1.0 + shift, x: x1, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+            ],
+            triggers: vec![
+                EmitterTrigger { time: -0.5 + shift, kind: TriggerKind::StartContinuous },
+                EmitterTrigger { time: 0.25 + shift, kind: TriggerKind::Burst },
+            ],
+        });
+        config
+    }
+
+    #[test]
+    fn a_prerolled_track_is_the_same_track_started_earlier() {
+        // The defining property: pre-roll is exactly "the timeline began
+        // `preroll` earlier", and nothing else. With a parked emitter the
+        // two run the same whole steps from reset, so they are bit-identical.
+        for t in [0.0f32, 0.25, 0.5, 1.0] {
+            let mut prerolled = Simulation::new(prerolled_config(0.5, 0.0, 10.0, 10.0), 5);
+            prerolled.seek(t);
+            let mut shifted = Simulation::new(prerolled_config(0.0, 0.5, 10.0, 10.0), 5);
+            shifted.seek(t + 0.5);
+            assert!(prerolled.particle_count() > 0, "vacuous at t={t}");
+            assert_eq!(buffer_bits(&prerolled), buffer_bits(&shifted), "t={t}");
+        }
+    }
+
+    #[test]
+    fn a_prerolled_track_follows_its_path_through_the_preroll() {
+        // A moving emitter: the two sample the path at times that differ by
+        // the shift, which rounds differently in f32, so this holds to a
+        // tolerance rather than bitwise. 1e-3 is the libm drift tolerance
+        // the fixtures use; the rounding here is far below it.
+        for t in [0.0f32, 0.5, 1.0] {
+            let mut prerolled = Simulation::new(prerolled_config(0.5, 0.0, -30.0, 60.0), 5);
+            prerolled.seek(t);
+            let mut shifted = Simulation::new(prerolled_config(0.0, 0.5, -30.0, 60.0), 5);
+            shifted.seek(t + 0.5);
+            assert_eq!(prerolled.particle_count(), shifted.particle_count(), "t={t}");
+            for (a, b) in prerolled.buffer().iter().zip(shifted.buffer()) {
+                assert!((a.x - b.x).abs() <= 1e-3 && (a.y - b.y).abs() <= 1e-3, "t={t}: {a:?} vs {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn seek_zero_returns_the_pool_the_preroll_built() {
+        let mut sim = Simulation::new(prerolled_config(0.5, 0.0, 10.0, 10.0), 5);
+        sim.seek(0.0);
+        // 0.5 s of continuous emission at 2 per step, all still alive.
+        assert_eq!(sim.particle_count(), 60);
+
+        // The same authored timeline with no pre-roll has run no steps at 0:
+        // its triggers before the start fire at the reset, and nothing spawns
+        // until a step runs.
+        let mut none = Simulation::new(prerolled_config(0.0, 0.0, 10.0, 10.0), 5);
+        none.seek(0.0);
+        assert_eq!(none.particle_count(), 0);
+    }
+
+    #[test]
+    fn forward_seek_matches_a_fresh_seek_through_a_preroll() {
+        let mut forward = Simulation::new(prerolled_config(0.5, 0.0, -30.0, 60.0), 5);
+        forward.seek(0.0);
+        forward.seek(0.25);
+        forward.seek(0.75);
+        let mut fresh = Simulation::new(prerolled_config(0.5, 0.0, -30.0, 60.0), 5);
+        fresh.seek(0.75);
+        assert!(forward.particle_count() > 0, "vacuous");
+        assert_eq!(buffer_bits(&forward), buffer_bits(&fresh));
+    }
+
+    fn burst_only_at(preroll: f32, time: f32) -> ParticleFxConfig {
+        let mut config = prerolled_config(preroll, 0.0, -30.0, 60.0);
+        config.emitter.spawn_rate_while_active = 0.0;
+        config.emitter_track.as_mut().unwrap().triggers = vec![EmitterTrigger { time, kind: TriggerKind::Burst }];
+        config
+    }
+
+    #[test]
+    fn a_trigger_at_a_negative_time_fires_at_its_step() {
+        // The emitter moves from x=-30 at -0.5 s to x=60 at 1.0 s (60 px/s).
+        // A burst at -0.25 s spawns at x=-15, and with no initial speed or
+        // inheritance the particles stay there, to within the 2 px jitter.
+        let mut sim = Simulation::new(burst_only_at(0.5, -0.25), 5);
+        sim.seek(0.0);
+        assert_eq!(sim.particle_count(), 3);
+        for p in sim.buffer() {
+            assert!((p.x + 15.0).abs() < 2.5, "x was {}", p.x);
+        }
+    }
+
+    #[test]
+    fn a_trigger_at_or_before_the_preroll_start_fires_at_the_start() {
+        for time in [-0.5f32, -5.0] {
+            let mut sim = Simulation::new(burst_only_at(0.5, time), 5);
+            sim.seek(0.0);
+            assert_eq!(sim.particle_count(), 3, "burst at {time}");
+            for p in sim.buffer() {
+                assert!((p.x + 30.0).abs() < 2.5, "burst at {time}: x was {}", p.x);
+            }
+        }
+    }
+
+    #[test]
+    fn a_trigger_far_beyond_any_track_never_fires_without_preroll() {
+        // 71582792.0 s is exact in f32 and is 2^32 + 224 grid steps: a
+        // wrapping i64 -> u32 cast would fire it at step 224 (3.73 s), so
+        // the track is lengthened to let `seek` reach that far.
+        let mut config = burst_only_at(0.0, 71582792.0);
+        config.emitter_track.as_mut().unwrap().duration = 10.0;
+        let mut sim = Simulation::new(config, 5);
+        sim.seek(4.0); // particles live 100 steps: stop just past step 224
+        assert_eq!(sim.particle_count(), 0);
+    }
+
+    #[test]
+    fn an_infinite_trigger_time_neither_panics_nor_fires() {
+        let mut config = burst_only_at(0.5, f32::MAX);
+        config
+            .emitter_track
+            .as_mut()
+            .unwrap()
+            .triggers
+            .push(EmitterTrigger { time: f32::INFINITY, kind: TriggerKind::Burst });
+        let mut sim = Simulation::new(config, 5);
+        sim.seek(1.0);
+        assert_eq!(sim.particle_count(), 0);
+    }
+
+    #[test]
+    fn a_trigger_at_an_off_grid_preroll_start_fires_at_the_reset() {
+        // Pre-roll 0.505 s is 30.3 steps, so S = 31 and the grid's first
+        // point (-31/60 s) lies before -0.505 s. A burst at -0.505 s is
+        // pinned to step 0 by the `time <= -preroll` branch; through the
+        // grid it would resolve to step 1, which fires just before the
+        // first step with the emitter already moved to the first grid time.
+        // Age cannot tell the two apart (both see all 31 steps), so the
+        // emitter does: it runs from x=0 at -0.505 s to x=1000 at -0.4 s,
+        // so at the reset it is at 0 but at -0.5 s (grid time of step 1) it
+        // is at ~47.6.
+        let mut config = burst_only_at(0.505, -0.505);
+        let track = config.emitter_track.as_mut().unwrap();
+        track.keyframes = vec![
+            EmitterKeyframe { time: -0.505, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+            EmitterKeyframe { time: -0.4, x: 1000.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+        ];
+        let mut sim = Simulation::new(config, 5);
+        sim.seek(0.0);
+        assert_eq!(sim.particle_count(), 3);
+        for p in sim.buffer() {
+            assert!(p.x.abs() < 2.5, "burst fired after the reset: x was {}", p.x);
+        }
+    }
+
+    #[test]
+    fn an_unvalidated_preroll_is_capped_and_a_non_finite_one_is_zero() {
+        // Built straight from the struct, so `clamp_to_bounds` never ran.
+        let mut huge = Simulation::new(prerolled_config(f32::MAX, 0.0, 10.0, 10.0), 5);
+        huge.seek(0.0); // at most 3600 steps, not f32::MAX * 60
+        // 62, not 60: inside a 60 s pre-roll the step that *ends* at -0.5 s
+        // exists, so the StartContinuous fires in it (the usual at-or-after
+        // rule) and emission runs 31 steps. With a 0.5 s pre-roll the
+        // trigger sits at the start and fires at the reset instead.
+        assert_eq!(huge.particle_count(), 62, "emission still starts at -0.5 s inside a 60 s pre-roll");
+
+        let mut nan = Simulation::new(prerolled_config(f32::NAN, 0.0, 10.0, 10.0), 5);
+        nan.seek(0.0);
+        assert_eq!(nan.particle_count(), 0, "a NaN pre-roll is no pre-roll");
+    }
+
+    #[test]
+    fn negative_times_take_the_grid_point_at_or_after_them() {
+        assert_eq!(signed_grid_step(-0.5), -30);
+        assert_eq!(signed_grid_step(-0.49), -29);
+        assert_eq!(signed_grid_step(-0.5 / 60.0), 0);
+        assert_eq!(signed_grid_step(0.0), 0);
+        assert_eq!(signed_grid_step(1.0 + 0.4 / 60.0), 61);
     }
 
     fn random_palette_config(stops: Option<Vec<ColorStop>>) -> ParticleFxConfig {
@@ -1471,11 +1741,76 @@ mod tests {
     }
 
     #[test]
+    fn keyframes_are_sampled_in_time_order_however_authored() {
+        // A pre-roll keyframe appended after the t >= 0 ones is the natural
+        // edit; `sample_track` needs ascending time, so baking sorts them.
+        // Sorted, the path runs x=-60 (t=-1) -> 0 (t=0) -> 60 (t=1), so a
+        // burst at -0.5 s spawns at x=-30.
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 0.0;
+        config.emitter.spawn_burst_size = 3;
+        config.lifetime_min = 100.0;
+        config.lifetime_max = 100.0;
+        config.emitter_track = Some(EmitterTrack {
+            duration: 1.0,
+            preroll: 1.0,
+            keyframes: vec![
+                EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+                EmitterKeyframe { time: 1.0, x: 60.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+                EmitterKeyframe { time: -1.0, x: -60.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+            ],
+            triggers: vec![EmitterTrigger { time: -0.5, kind: TriggerKind::Burst }],
+        });
+        let mut sim = Simulation::new(config, 3);
+        sim.seek(0.0);
+        assert_eq!(sim.particle_count(), 3);
+        for (p, inst) in sim.buffer().iter().enumerate() {
+            assert!((inst.x - -30.0).abs() < 2.5, "particle {p} at x={}, expected about -30", inst.x);
+        }
+    }
+
+    #[test]
+    fn a_non_finite_trigger_time_is_dropped() {
+        // A NaN trigger used to sort as "equal" to everything and resolve to
+        // step 0, firing a burst at the reset. It has no step, so it is
+        // dropped.
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 2.0;
+        config.emitter.spawn_burst_size = 3;
+        config.lifetime_min = 100.0;
+        config.lifetime_max = 100.0;
+        config.emitter_track = Some(EmitterTrack {
+            duration: 1.0,
+            preroll: 0.0,
+            keyframes: vec![
+                EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+                EmitterKeyframe { time: 1.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+            ],
+            triggers: vec![
+                EmitterTrigger { time: f32::NAN, kind: TriggerKind::Burst },
+                EmitterTrigger { time: 0.2, kind: TriggerKind::StopContinuous },
+                EmitterTrigger { time: 0.1, kind: TriggerKind::StartContinuous },
+            ],
+        });
+        let mut sim = Simulation::new(config, 3);
+        sim.seek(0.0);
+        assert_eq!(sim.particle_count(), 0, "the NaN burst must not fire at the reset");
+
+        // Start fires at step 6 and Stop at step 12; a trigger at step k
+        // applies before the step that spawns, so steps 6..12 are active:
+        // 6 steps. `step` adds rate * fe = 2.0 * 1.0 to the spawn budget
+        // and spawns floor(2.0) = 2 per step: 6 * 2 = 12.
+        sim.seek(0.5);
+        assert_eq!(sim.particle_count(), 12);
+    }
+
+    #[test]
     fn seek_start_continuous_then_stop_continuous_actually_toggles_spawning() {
         let mut config = base_config();
         config.emitter.spawn_rate_while_active = 10.0;
         config.emitter_track = Some(EmitterTrack {
             duration: 2.0,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 2.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1513,6 +1848,7 @@ mod tests {
         config.emitter.spawn_burst_size = 3;
         config.emitter_track = Some(EmitterTrack {
             duration: 1.0,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 1.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1532,6 +1868,7 @@ mod tests {
         config.emitter.spawn_burst_size = 3;
         config.emitter_track = Some(EmitterTrack {
             duration: 1.0,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 1.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1554,6 +1891,7 @@ mod tests {
         config.emitter.spawn_rate_while_active = 10.0;
         config.emitter_track = Some(EmitterTrack {
             duration: 1.0,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 1.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1588,6 +1926,7 @@ mod tests {
         config.emitter.spawn_burst_size = 1;
         config.emitter_track = Some(EmitterTrack {
             duration: 0.5,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 0.5, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1616,6 +1955,7 @@ mod tests {
         config.emitter.spawn_burst_size = 1;
         config.emitter_track = Some(EmitterTrack {
             duration: f32::MAX,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 1.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1709,6 +2049,7 @@ mod tests {
         config.emitter.spawn_burst_size = 4;
         config.emitter_track = Some(EmitterTrack {
             duration: 300.0,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 300.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1729,6 +2070,7 @@ mod tests {
         // floor-to-the-grid seek would never run.
         let track = EmitterTrack {
             duration: 0.525,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 0.525, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1765,6 +2107,7 @@ mod tests {
             config.emitter.spawn_burst_size = 2;
             config.emitter_track = Some(EmitterTrack {
                 duration: 1.0,
+                preroll: 0.0,
                 keyframes: vec![
                     EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                     EmitterKeyframe { time: 1.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1799,6 +2142,7 @@ mod tests {
             config.emitter.spawn_burst_size = 2;
             config.emitter_track = Some(EmitterTrack {
                 duration,
+                preroll: 0.0,
                 keyframes: vec![
                     EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                     EmitterKeyframe { time: duration, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1824,6 +2168,7 @@ mod tests {
         config.emitter.spawn_burst_size = 4;
         config.emitter_track = Some(EmitterTrack {
             duration: 0.525,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 1.0, x: 1000.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -2301,7 +2646,7 @@ mod tests {
         let mut fresh = make();
         fresh.seek(0.55);
 
-        // Backward: overshoot, then seek back, which replays from zero.
+        // Backward: overshoot, then seek back, which replays from the start of the track.
         let mut rewound = make();
         rewound.seek(0.75);
         rewound.seek(0.55);

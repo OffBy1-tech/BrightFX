@@ -34,8 +34,15 @@ exactly once.
     between; any other call sequence (a backward seek, or any `advance`,
     `trigger_burst`, `set_emitter`, `set_config`, or a `set_bounds` that changes
     the size since) resets and
-    replays from t=0. Both paths run the same whole steps, so the buffer
+    replays from the start of the track. Both paths run the same whole steps, so the buffer
     is a pure function of `time`. No-op without a track.
+    With `emitter_track.preroll` (schema version 5) the track's timeline
+    starts that many seconds before t=0, and a replay starts there, so
+    `seek(0)` returns the pool after that much playback. Keyframes and
+    triggers may be authored at negative times down to `-preroll`; a
+    trigger earlier than that fires at the start. `time` still clamps at
+    0: the pre-roll is simulated, never rendered. Capped at 60 s
+    (`MAX_PREROLL`).
 
     The snap tolerance grows with `time` (it tracks the f32 rounding of
     `time` itself), so a `time` just *after* a grid point can snap down
@@ -175,6 +182,29 @@ bounds, or `set_config` with any config, also culls the live pool at once, by
 the same rule, and permanently: growing the bounds or restoring a larger
 `cullMargin` does not bring particles back. If a host calls both
 `set_viewport` and `set_bounds`, the last call wins.
+
+## Pre-roll
+
+A baked effect's pool is empty at t=0 unless its track says otherwise. A
+rain takes a few seconds to fill a frame, so a composition that shows it
+in its first seconds would get an empty lower frame filling up (#19).
+`emitterTrack.preroll` (schema version 5) extends the timeline before t=0
+by that many seconds. The grid stays anchored at t=0 and the pre-roll adds
+`grid_step(preroll)` whole steps in front of it, so a pre-rolled track runs
+the same whole steps as the same track with every time moved later by the
+pre-roll: bit-identical with a parked emitter
+(`a_prerolled_track_is_the_same_track_started_earlier`); a moving emitter
+samples its path at times that differ only by f32 rounding and, for an
+off-grid pre-roll, by the gap to the next grid point
+(`a_prerolled_track_follows_its_path_through_the_preroll`, held to 1e-3).
+With no pre-roll, a trigger authored at t=0 fires at the reset and `seek(0)`
+returns its burst unstepped; with any pre-roll it fires in the step that
+ends at t=0 and has been stepped once by `seek(0)`, like every other grid
+point. So adding `preroll` to a track with a `Burst` at 0 moves that
+burst's first frame by one step. The
+presets each pre-roll one full `lifetimeMax`, which is a steady-state
+pool by construction: every particle alive at t=0 was born within the last
+`lifetimeMax` steps.
 
 ## Color modes
 

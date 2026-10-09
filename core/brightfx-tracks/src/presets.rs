@@ -2,8 +2,11 @@
 //! module rendered to JSON by `examples/gen_presets.rs`; the test in
 //! `tests/presets.rs` fails if they drift. Every preset is authored in a
 //! 1920×1080 pixel frame and carries a `MAX_EMITTER_TRACK_DURATION` track
-//! with one `StartContinuous` at 0, so `amount` and `window` in the
-//! composition, not the track, decide when it shows.
+//! with one `StartContinuous` at the start of its pre-roll, so `amount`
+//! and `window` in the composition, not the track, decide when it shows.
+//! The pre-roll is one full `lifetimeMax` (`preroll_for`), so the first
+//! frame a composition shows is already the steady state rather than an
+//! empty frame filling up.
 //!
 //! The core spawns within ±2 px of the emitter, so presets that cover an
 //! area move the emitter: `sweep_track` for an edge, `scatter_sweep` for
@@ -86,16 +89,23 @@ const RAIN_EDGE: f32 = 20.0;
 /// `y_min == y_max` is allowed and useful: it degenerates to a wandering
 /// *horizontal* path at a fixed height, which is what a rain wants when
 /// its edge must be visited out of order.
-fn scatter_sweep(y_min: f32, y_max: f32, leg: f32) -> EmitterTrack {
+/// `preroll` seconds of the same wander are laid down before t=0 and the
+/// track carries it, so `seek(0)` returns a pool that has already run that
+/// long. The hash is keyed on the index from the track's start, so a
+/// pre-roll moves the pseudo-random path; nothing depends on where it is.
+fn scatter_sweep(y_min: f32, y_max: f32, leg: f32, preroll: f32) -> EmitterTrack {
     let leg = leg.max(PLAYBACK_STEP);
-    let count = crate::sweep::leg_count(TRACK_DURATION, leg) + 1;
+    let preroll = brightfx_core::sanitize_preroll(preroll);
+    let before = if preroll > 0.0 { crate::sweep::leg_count(preroll, leg) + 1 } else { 0 };
+    let count = before + crate::sweep::leg_count(TRACK_DURATION, leg) + 1;
     let mut keyframes = Vec::with_capacity(count);
-    for i in 0..count {
-        let i = i as u32;
+    for j in 0..count {
+        let i = j as i64 - before as i64;
+        let j = j as u32;
         // Off the left and right edges by a margin, so the chords cover the
         // frame's own edges instead of turning back at them.
-        let fx = ((i * 3571) % 10007) as f32 / 10007.0;
-        let fy = ((i * 7919) % 10009) as f32 / 10009.0;
+        let fx = ((j * 3571) % 10007) as f32 / 10007.0;
+        let fy = ((j * 7919) % 10009) as f32 / 10009.0;
         keyframes.push(EmitterKeyframe {
             time: (i as f32 * leg).min(TRACK_DURATION),
             x: -SCATTER_MARGIN + fx * (FRAME_W + 2.0 * SCATTER_MARGIN),
@@ -106,8 +116,9 @@ fn scatter_sweep(y_min: f32, y_max: f32, leg: f32) -> EmitterTrack {
     }
     EmitterTrack {
         duration: TRACK_DURATION,
+        preroll,
         keyframes,
-        triggers: vec![EmitterTrigger { time: 0.0, kind: TriggerKind::StartContinuous }],
+        triggers: vec![EmitterTrigger { time: 0.0 - preroll, kind: TriggerKind::StartContinuous }],
     }
 }
 
@@ -132,8 +143,9 @@ fn palette(colors: &[&str]) -> Option<Vec<ColorStop>> {
 }
 
 /// `icon` is one short word a picker can show; it is per preset, so the
-/// library does not present seven identical tiles.
-fn base(id: &str, name: &str, description: &str, icon: &str, track: EmitterTrack) -> ParticleFxConfig {
+/// library does not present seven identical tiles. The track is attached
+/// last, by `with_track`, once the fields its pre-roll depends on are set.
+fn base(id: &str, name: &str, description: &str, icon: &str) -> ParticleFxConfig {
     ParticleFxConfig {
         id: id.into(),
         name: name.into(),
@@ -141,9 +153,25 @@ fn base(id: &str, name: &str, description: &str, icon: &str, track: EmitterTrack
         description: description.into(),
         author: Some("Off By 1".into()),
         icon: icon.into(),
-        emitter_track: Some(track),
         ..ParticleFxConfig::default()
     }
+}
+
+/// The pre-roll a preset needs to be at steady state at t=0: one full
+/// `lifetimeMax`, in seconds (lifetimes are in 1/60 s steps). Every
+/// particle alive at t=0 was born within the last `lifetimeMax` steps, so
+/// after that long the pool is what it will be from then on, for any spawn
+/// rate, frame size, or cull margin.
+pub fn preroll_for(config: &ParticleFxConfig) -> f32 {
+    config.lifetime_max / 60.0
+}
+
+/// Attaches the track `make` generates for the config's own pre-roll.
+/// Called last in every preset, after `lifetime_max` is set.
+fn with_track(mut config: ParticleFxConfig, make: impl FnOnce(f32) -> EmitterTrack) -> ParticleFxConfig {
+    let preroll = preroll_for(&config);
+    config.emitter_track = Some(make(preroll));
+    config
 }
 
 fn emitter(rate: f32, burst: u32, pattern: EmissionPattern, angle: f32, spread: f32) -> EmitterConfig {
@@ -187,7 +215,6 @@ pub fn confetti() -> ParticleFxConfig {
         "Confetti",
         "Rainbow diamonds drifting down across the whole frame",
         "confetti",
-        scatter_sweep(-40.0, FRAME_H, 0.15),
     );
     c.emitter = emitter(1.8, 30, EmissionPattern::DirectionalCone, 90.0, 40.0);
     c.shape = ParticleShape::Diamond;
@@ -211,7 +238,7 @@ pub fn confetti() -> ParticleFxConfig {
     c.start_alpha = 1.0;
     c.peak_alpha = 1.0;
     c.end_alpha = 0.0;
-    c
+    with_track(c, |preroll| scatter_sweep(-40.0, FRAME_H, 0.15, preroll))
 }
 
 /// Soft yellow glows over the top 85% of the frame: `Fireflies`, 22 dots
@@ -225,7 +252,6 @@ pub fn fireflies() -> ParticleFxConfig {
         "Fireflies",
         "Soft yellow glows twinkling over the top 85% of the frame",
         "firefly",
-        scatter_sweep(0.0, FRAME_H * 0.85, 0.08),
     );
     c.emitter = emitter(0.2, 12, EmissionPattern::RadialBurst, 0.0, 360.0);
     c.shape = ParticleShape::GlowDisc;
@@ -248,7 +274,7 @@ pub fn fireflies() -> ParticleFxConfig {
     c.start_alpha = 0.0;
     c.peak_alpha = 1.0;
     c.end_alpha = 0.0;
-    c
+    with_track(c, |preroll| scatter_sweep(0.0, FRAME_H * 0.85, 0.08, preroll))
 }
 
 /// White-to-gold stars drifting up and fading. The effect it replaces
@@ -271,7 +297,6 @@ pub fn sparkles() -> ParticleFxConfig {
         "Sparkles",
         "White-to-gold stars drifting up and fading; bursts for entrances",
         "sparkle",
-        scatter_sweep(0.0, FRAME_H, 0.08),
     );
     c.emitter = emitter(0.4, 40, EmissionPattern::DirectionalCone, 270.0, 60.0);
     c.shape = ParticleShape::SparkleStar;
@@ -298,7 +323,7 @@ pub fn sparkles() -> ParticleFxConfig {
     c.start_alpha = 0.0;
     c.peak_alpha = 1.0;
     c.end_alpha = 0.0;
-    c
+    with_track(c, |preroll| scatter_sweep(0.0, FRAME_H, 0.08, preroll))
 }
 
 /// Rainbow capsules falling from just above the top edge, after
@@ -342,7 +367,6 @@ pub fn sprinkle_rain() -> ParticleFxConfig {
         "Sprinkle Rain",
         "Rainbow sprinkles raining down from the top edge",
         "sprinkle",
-        scatter_sweep(-RAIN_EDGE, -RAIN_EDGE, 0.1),
     );
     c.emitter = emitter(0.9, 30, EmissionPattern::DirectionalCone, 90.0, 20.0);
     c.shape = ParticleShape::Capsule;
@@ -368,7 +392,7 @@ pub fn sprinkle_rain() -> ParticleFxConfig {
     c.start_alpha = 0.95;
     c.peak_alpha = 0.95;
     c.end_alpha = 0.95;
-    c
+    with_track(c, |preroll| scatter_sweep(-RAIN_EDGE, -RAIN_EDGE, 0.1, preroll))
 }
 
 /// Pink frosting drops raining from the top edge, after `FrostingRain`'s
@@ -415,7 +439,6 @@ pub fn frosting_rain() -> ParticleFxConfig {
         "Frosting Rain",
         "Pink frosting drops raining from the top edge",
         "frosting",
-        sweep_track((0.0, -RAIN_EDGE), (FRAME_W, -RAIN_EDGE), 0.5, TRACK_DURATION),
     );
     c.emitter = emitter(1.35, 30, EmissionPattern::DirectionalCone, 90.0, 15.0);
     c.shape = ParticleShape::Capsule;
@@ -442,7 +465,7 @@ pub fn frosting_rain() -> ParticleFxConfig {
     c.start_alpha = 0.95;
     c.peak_alpha = 0.95;
     c.end_alpha = 0.95;
-    c
+    with_track(c, |preroll| sweep_track((0.0, -RAIN_EDGE), (FRAME_W, -RAIN_EDGE), 0.5, TRACK_DURATION, preroll))
 }
 
 /// Pale bubbles rising from the bottom edge: `GriddleBubbles`, ten large
@@ -455,7 +478,6 @@ pub fn bubbles() -> ParticleFxConfig {
         "Bubbles",
         "Pale bubbles rising from the bottom edge and fading out",
         "bubble",
-        sweep_track((0.0, FRAME_H + 20.0), (FRAME_W, FRAME_H + 20.0), 0.6, TRACK_DURATION),
     );
     c.emitter = emitter(0.12, 20, EmissionPattern::DirectionalCone, 270.0, 30.0);
     c.shape = ParticleShape::Bubble;
@@ -479,7 +501,7 @@ pub fn bubbles() -> ParticleFxConfig {
     c.start_alpha = 0.9;
     c.peak_alpha = 0.9;
     c.end_alpha = 0.0;
-    c
+    with_track(c, |preroll| sweep_track((0.0, FRAME_H + 20.0), (FRAME_W, FRAME_H + 20.0), 0.6, TRACK_DURATION, preroll))
 }
 
 /// Sprite-mode preset: the motion of the flying donuts, pancakes, notes,
@@ -515,7 +537,6 @@ pub fn flight_arc() -> ParticleFxConfig {
         "Flight Arc",
         "Objects thrown in from the left, arcing right across the frame",
         "arc",
-        sweep_track((-100.0, FRAME_H * 0.43), (-100.0, FRAME_H * 0.6), 3.0, TRACK_DURATION),
     );
     c.emitter = emitter(0.035, 4, EmissionPattern::DirectionalCone, 330.0, 4.0);
     c.shape = ParticleShape::Circle;
@@ -540,7 +561,7 @@ pub fn flight_arc() -> ParticleFxConfig {
     c.start_alpha = 1.0;
     c.peak_alpha = 1.0;
     c.end_alpha = 1.0;
-    c
+    with_track(c, |preroll| sweep_track((-100.0, FRAME_H * 0.43), (-100.0, FRAME_H * 0.6), 3.0, TRACK_DURATION, preroll))
 }
 
 /// Every preset, by file stem, in the order they are documented.
@@ -580,7 +601,7 @@ mod tests {
 
     #[test]
     fn the_scatter_sweep_covers_its_band_and_reaches_both_edges() {
-        let track = scatter_sweep(0.0, FRAME_H * 0.85, 0.12);
+        let track = scatter_sweep(0.0, FRAME_H * 0.85, 0.12, 0.0);
         assert_eq!(track.duration, TRACK_DURATION);
         assert!(track.keyframes.iter().all(|k| k.y >= 0.0 && k.y <= FRAME_H * 0.85));
         assert!(track.keyframes.iter().all(|k| k.x >= -SCATTER_MARGIN && k.x <= FRAME_W + SCATTER_MARGIN));
@@ -597,7 +618,7 @@ mod tests {
 
     #[test]
     fn a_sub_step_leg_is_floored_rather_than_collapsing_to_a_point() {
-        let track = scatter_sweep(0.0, 100.0, 0.0);
+        let track = scatter_sweep(0.0, 100.0, 0.0, 0.0);
         let dt = track.keyframes[1].time - track.keyframes[0].time;
         assert!((dt - PLAYBACK_STEP).abs() < 1e-6, "leg of {dt}s");
     }
@@ -606,7 +627,7 @@ mod tests {
     fn successive_scatter_legs_do_not_repeat_a_position_within_a_lifetime() {
         // The defect this guards: a path whose period divides the spawn
         // cadence puts every particle on a handful of columns.
-        let track = scatter_sweep(0.0, FRAME_H, 0.12);
+        let track = scatter_sweep(0.0, FRAME_H, 0.12, 0.0);
         let window = (2.0 / 0.12) as usize;
         for w in 1..window {
             assert!(
@@ -648,6 +669,47 @@ mod tests {
     fn every_preset_is_named_after_its_file_stem() {
         for (name, config) in library() {
             assert_eq!(config.id, name);
+        }
+    }
+
+    #[test]
+    fn a_zero_preroll_scatter_starts_at_positive_zero() {
+        let track = scatter_sweep(0.0, 100.0, 0.5, 0.0);
+        assert_eq!(track.preroll, 0.0);
+        assert_eq!(track.triggers[0].time, 0.0);
+        assert!(track.triggers[0].time.is_sign_positive(), "a zero pre-roll must write 0.0, not -0.0");
+    }
+
+    #[test]
+    fn a_preroll_extends_the_scatter_backwards_and_starts_emission_there() {
+        let track = scatter_sweep(0.0, 100.0, 0.5, 1.2);
+        assert_eq!(track.preroll, 1.2);
+        let first = track.keyframes[0].time;
+        // Two whole legs fit in 1.2 s at 0.5 s, plus one: -1.5, which
+        // reaches past -1.2 rather than parking the emitter there.
+        assert_eq!(first, -1.5);
+        assert!(track.keyframes.iter().any(|k| k.time == 0.0), "a keyframe still lands on t=0");
+        assert!(track.keyframes.windows(2).all(|w| w[1].time > w[0].time), "times ascend");
+        assert_eq!(track.triggers, vec![EmitterTrigger { time: -1.2, kind: TriggerKind::StartContinuous }]);
+        assert!(track.keyframes.iter().all(|k| k.y >= 0.0 && k.y <= 100.0));
+    }
+
+    #[test]
+    fn every_preset_prerolls_one_full_lifetime() {
+        // Every particle alive at t=0 was born within the last `lifetimeMax`
+        // steps, so one full lifetime of warm-up is a steady-state pool for
+        // any spawn rate, frame size, or cull margin. One rule, no tuning.
+        for (name, config) in library() {
+            let track = config.emitter_track.as_ref().expect("every preset carries a track");
+            assert_eq!(track.preroll, config.lifetime_max / 60.0, "{name}");
+            assert_eq!(track.preroll, preroll_for(&config), "{name}");
+            assert_eq!(
+                track.triggers,
+                vec![EmitterTrigger { time: -track.preroll, kind: TriggerKind::StartContinuous }],
+                "{name}: the one trigger starts emission at the start of the pre-roll"
+            );
+            let first = track.keyframes[0].time;
+            assert!(first <= -track.preroll, "{name}: first keyframe at {first} does not cover the pre-roll");
         }
     }
 }

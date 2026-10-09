@@ -12,5 +12,6 @@ mod particle;
 mod color;
 mod simulation;
 pub use schema::MAX_EMITTER_TRACK_DURATION;
+pub use schema::{sanitize_preroll, MAX_PREROLL};
 pub use simulation::{ParticleInstance, Simulation};
 pub use simulation::PLAYBACK_STEP;

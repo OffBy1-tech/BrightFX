@@ -92,11 +92,11 @@ mod tests {
     #[test]
     fn fit_track_json_applies_the_core_schema_gate() {
         let mut config = serde_json::to_value(ParticleFxConfig::default()).unwrap();
-        config["schemaVersion"] = serde_json::json!(5);
+        config["schemaVersion"] = serde_json::json!(6);
         config["somethingNew"] = serde_json::json!(true);
         let v = parse(&fit_track_json(&config.to_string(), 1920.0, 1080.0, 1080.0, 1920.0));
         assert_eq!(v["ok"], false);
-        assert!(v["error"].as_str().unwrap().contains("unsupported schemaVersion 5"), "{v}");
+        assert!(v["error"].as_str().unwrap().contains("unsupported schemaVersion 6"), "{v}");
     }
 
     #[test]

@@ -107,6 +107,11 @@ cuts them off. Past the emitter track's `duration` (at most 600 s) the
 component renders nothing and skips the seek, since every later time would
 replay the track's last state frozen.
 
+`window` and `useCurrentFrame` are composition time. An effect whose track
+carries a `preroll` (every shipped preset does) has already run that long
+when the composition starts, so its first frame is the steady state; the
+pre-roll itself is simulated by the core, never seeked to or drawn.
+
 ## Sprite mode's unstable key
 
 In sprite mode, `render` is called with an **unstable index key** — particles

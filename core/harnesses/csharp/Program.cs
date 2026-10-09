@@ -265,6 +265,32 @@ internal static class Program
         AssertBufferMatches(freshSim.Ptr, forwardCount, forwardExpected.ParticleFloats, forwardFloats, 0f);
         Console.WriteLine("  ok  forward seeks reproduce the Rust buffer and match a fresh seek exactly");
 
+        string prerollConfigJson = File.ReadAllText(Path.Combine(fixtures, "ffi-preroll.config.json"));
+        SeekExpectation prerollExpected = JsonSerializer.Deserialize<SeekExpectation>(
+            File.ReadAllText(Path.Combine(fixtures, "ffi-preroll.expected.json")))!;
+        if (prerollExpected.ParticleCount == 0 || prerollExpected.SeekTimes.Length != 1 || prerollExpected.SeekTimes[0] != 0f)
+            Fail("pre-roll fixture is vacuous or does not record seek(0)");
+
+        using var prerollSim = new Simulation(prerollExpected.Seed);
+        ApplyConfig(prerollSim.Ptr, prerollConfigJson, "pre-roll config");
+        foreach (float time in prerollExpected.SeekTimes) Native.bfx_seek(prerollSim.Ptr, time);
+        AssertBufferMatches(prerollSim.Ptr, prerollExpected.ParticleCount, prerollExpected.ParticleFloats, prerollExpected.Buffer, prerollExpected.Tolerance);
+
+        // Leaving the pre-roll is a forward seek: bit-identical to a fresh one.
+        Native.bfx_seek(prerollSim.Ptr, 0.5f);
+        uint prerollCount = Native.bfx_particle_count(prerollSim.Ptr);
+        if (prerollCount == 0) Fail("pool is empty after leaving the pre-roll");
+        IntPtr prerollBase = Native.bfx_buffer_ptr(prerollSim.Ptr);
+        if (prerollBase == IntPtr.Zero) Fail("bfx_buffer_ptr returned NULL");
+        float[] prerollFloats =
+            Native.View<float>(prerollBase, (int)(prerollCount * prerollExpected.ParticleFloats)).ToArray();
+
+        using var prerollFresh = new Simulation(prerollExpected.Seed);
+        ApplyConfig(prerollFresh.Ptr, prerollConfigJson, "pre-roll fresh config");
+        Native.bfx_seek(prerollFresh.Ptr, 0.5f);
+        AssertBufferMatches(prerollFresh.Ptr, prerollCount, prerollExpected.ParticleFloats, prerollFloats, 0f);
+        Console.WriteLine("  ok  a pre-rolled track is already running at t=0 and steps on bit-identically");
+
         string frameConfigJson = File.ReadAllText(Path.Combine(fixtures, "ffi-frame.config.json"));
         FrameExpectation frameExpected = JsonSerializer.Deserialize<FrameExpectation>(
             File.ReadAllText(Path.Combine(fixtures, "ffi-frame.expected.json")))!;
