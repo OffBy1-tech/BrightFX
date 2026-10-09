@@ -94,7 +94,7 @@ void bfx_advance(struct BfxSimulation *sim, float dt);
  * seek at or after the previous one steps forward
  * from it, and any other call sequence -- a backward seek, or any
  * `bfx_advance`, `bfx_trigger_burst`, `bfx_set_emitter`,
- * `bfx_set_bounds` (with a new size), or `bfx_set_config` since -- replays from t=0, giving the same buffer
+ * `bfx_set_bounds` (with a new size), or `bfx_set_config` since -- replays from the start of the track (its pre-roll before t=0), giving the same buffer
  * either way.
  *
  * # Safety

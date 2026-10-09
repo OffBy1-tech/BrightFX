@@ -123,6 +123,7 @@ test("a pre-rolled track is already running at t=0 and steps on bit-identically"
 
   // Leaving the pre-roll is a forward seek: bit-identical to a fresh one.
   sim.seek(0.5);
+  assert.ok(sim.particleCount() > 0, "pool is empty after leaving the pre-roll");
   const fresh = new mod.BrightFx(BigInt(prerollExpected.seed));
   applyConfig(fresh, prerollConfigJson);
   fresh.seek(0.5);

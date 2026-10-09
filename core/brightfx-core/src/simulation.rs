@@ -161,7 +161,7 @@ pub struct Simulation {
     /// (step 0 is the start of the pre-roll, see
     /// `BakedTrack::preroll_steps`). `None`
     /// whenever the pool is not the product of a pure replay, so the next
-    /// `seek` replays from zero. Only `seek` sets it; everything else
+    /// `seek` replays from the start of the track. Only `seek` sets it; everything else
     /// clears it through `leave_baked`.
     baked: Option<u32>,
     /// Logical-pixel size of the rectangle `[0, w] x [0, h]` that
@@ -223,7 +223,7 @@ impl Simulation {
     /// (sprite mode) calls it with its container size.
     ///
     /// A change clears the baked position: culling makes the pool depend
-    /// on the bounds, so the next `seek` must replay from zero rather than
+    /// on the bounds, so the next `seek` must replay from the start of the track rather than
     /// step forward from a pool built for another size. It also culls the
     /// live pool against the new bounds now, so a render without a step
     /// does not show particles the new frame would have dropped. That is
@@ -339,8 +339,8 @@ impl Simulation {
         &self.config.name
     }
 
-    /// Drops the baked position, so the next `seek` replays from zero
-    /// instead of stepping forward. The one place `baked` is cleared. By
+    /// Drops the baked position, so the next `seek` replays from the start of the track
+    /// (its pre-roll before t=0) instead of stepping forward. The one place `baked` is cleared. By
     /// convention -- enforced by tests, not the compiler -- every host-facing call that
     /// changes simulation state calls this: `set_emitter`, `trigger_burst`,
     /// and `advance` before their own writes, `set_config` after swapping
@@ -393,7 +393,8 @@ impl Simulation {
     ///
     /// If the last call was a seek to an earlier or equal grid step, only
     /// the steps in between are applied; otherwise the simulation resets
-    /// and replays from t=0. Both paths run the same whole steps from a
+    /// and replays from the start of the track (its pre-roll before t=0).
+    /// Both paths run the same whole steps from a
     /// reset, so the buffer is a pure function of `time` regardless of
     /// call history. A no-op (empty buffer) if the config has no
     /// `emitter_track`.
@@ -2645,7 +2646,7 @@ mod tests {
         let mut fresh = make();
         fresh.seek(0.55);
 
-        // Backward: overshoot, then seek back, which replays from zero.
+        // Backward: overshoot, then seek back, which replays from the start of the track.
         let mut rewound = make();
         rewound.seek(0.75);
         rewound.seek(0.55);

@@ -215,6 +215,7 @@ func run() throws {
     // Leaving the pre-roll is a forward seek: bit-identical to a fresh one.
     bfx_seek(prerollSim, 0.5)
     let prerollCount = bfx_particle_count(prerollSim)
+    guard prerollCount > 0 else { throw Failure("pool is empty after leaving the pre-roll") }
     guard let prerollBase = bfx_buffer_ptr(prerollSim) else { throw Failure("bfx_buffer_ptr returned NULL") }
     let prerollFloats = Array(
         UnsafeBufferPointer(start: prerollBase, count: Int(prerollCount * prerollExpected.particleFloats)))

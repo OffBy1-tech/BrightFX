@@ -279,6 +279,7 @@ internal static class Program
         // Leaving the pre-roll is a forward seek: bit-identical to a fresh one.
         Native.bfx_seek(prerollSim.Ptr, 0.5f);
         uint prerollCount = Native.bfx_particle_count(prerollSim.Ptr);
+        if (prerollCount == 0) Fail("pool is empty after leaving the pre-roll");
         IntPtr prerollBase = Native.bfx_buffer_ptr(prerollSim.Ptr);
         if (prerollBase == IntPtr.Zero) Fail("bfx_buffer_ptr returned NULL");
         float[] prerollFloats =
