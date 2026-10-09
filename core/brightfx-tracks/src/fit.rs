@@ -81,7 +81,7 @@ pub fn fit_track(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brightfx_core::schema::{EmitterKeyframe, EmitterTrack};
+    use brightfx_core::schema::{EmitterKeyframe, EmitterTrack, EmitterTrigger, TriggerKind};
 
     #[allow(clippy::field_reassign_with_default)]
     fn authored() -> ParticleFxConfig {
@@ -206,5 +206,21 @@ mod tests {
             let err = fit_track(authored(), from, to).unwrap_err();
             assert!(err.contains(name), "expected {name} in: {err}");
         }
+    }
+
+    #[test]
+    fn a_preroll_and_negative_times_pass_through_the_fit_untouched() {
+        let mut config = authored();
+        let track = config.emitter_track.as_mut().unwrap();
+        track.preroll = 1.5;
+        track.keyframes.insert(0, EmitterKeyframe { time: -1.5, x: -192.0, y: 0.0, vx: None, vy: None });
+        track.triggers.push(EmitterTrigger { time: -1.5, kind: TriggerKind::StartContinuous });
+
+        let fitted = fit_track(config, (1920.0, 1080.0), (3840.0, 2160.0)).unwrap();
+        let track = fitted.emitter_track.unwrap();
+        assert_eq!(track.preroll, 1.5);
+        assert_eq!(track.keyframes[0].time, -1.5);
+        assert_eq!(track.keyframes[0].x, -384.0, "x scales, time does not");
+        assert_eq!(track.triggers[0].time, -1.5);
     }
 }
