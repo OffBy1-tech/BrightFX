@@ -37,6 +37,9 @@ pub(crate) fn leg_count(duration: f32, leg: f32) -> usize {
 /// back once per `period` seconds, for `duration` seconds, with a single
 /// `StartContinuous` at the start of the timeline. The core spawns within
 /// ±2 px of the emitter, so the path is the area the effect covers.
+/// Keyframe velocities are pinned to zero so the sweep does not leak into
+/// the particles through `velocityInheritance` or the trail pattern's
+/// direction; the host decides whether a moving emitter should throw.
 ///
 /// `preroll` seconds of the same path are laid down before t=0 and the
 /// track carries it, so `seek(0)` returns a pool that has already run that
@@ -77,8 +80,8 @@ pub fn sweep_track(a: (f32, f32), b: (f32, f32), period: f32, duration: f32, pre
         preroll,
         keyframes,
         // `0.0 - preroll`, not `-preroll`: negating a zero gives -0.0, which
-        // serializes as `-0.0` and would change every track without a
-        // pre-roll (and the cue fixture's bytes).
+        // serializes as `-0.0` and would change the bytes of any track
+        // generated with a zero pre-roll (the tests, and any future caller).
         triggers: vec![EmitterTrigger { time: 0.0 - preroll, kind: TriggerKind::StartContinuous }],
     }
 }
@@ -147,6 +150,7 @@ mod tests {
         assert_eq!(track.preroll, 0.0);
         assert_eq!(track.keyframes[0].time, 0.0);
         assert_eq!(track.triggers[0].time, 0.0);
+        assert!(track.triggers[0].time.is_sign_positive(), "a zero pre-roll must write 0.0, not -0.0");
     }
 
     #[test]
