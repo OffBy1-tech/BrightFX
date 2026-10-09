@@ -1152,6 +1152,7 @@ mod tests {
         config.emitter.spawn_burst_size = 1;
         config.emitter_track = Some(EmitterTrack {
             duration: 1.0,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 1.0, x: 60.0, y: 0.0, vx: Some(60.0), vy: Some(0.0) },
@@ -1476,6 +1477,7 @@ mod tests {
         config.emitter.spawn_rate_while_active = 10.0;
         config.emitter_track = Some(EmitterTrack {
             duration: 2.0,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 2.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1513,6 +1515,7 @@ mod tests {
         config.emitter.spawn_burst_size = 3;
         config.emitter_track = Some(EmitterTrack {
             duration: 1.0,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 1.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1532,6 +1535,7 @@ mod tests {
         config.emitter.spawn_burst_size = 3;
         config.emitter_track = Some(EmitterTrack {
             duration: 1.0,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 1.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1554,6 +1558,7 @@ mod tests {
         config.emitter.spawn_rate_while_active = 10.0;
         config.emitter_track = Some(EmitterTrack {
             duration: 1.0,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 1.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1588,6 +1593,7 @@ mod tests {
         config.emitter.spawn_burst_size = 1;
         config.emitter_track = Some(EmitterTrack {
             duration: 0.5,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 0.5, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1616,6 +1622,7 @@ mod tests {
         config.emitter.spawn_burst_size = 1;
         config.emitter_track = Some(EmitterTrack {
             duration: f32::MAX,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 1.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1709,6 +1716,7 @@ mod tests {
         config.emitter.spawn_burst_size = 4;
         config.emitter_track = Some(EmitterTrack {
             duration: 300.0,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 300.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1729,6 +1737,7 @@ mod tests {
         // floor-to-the-grid seek would never run.
         let track = EmitterTrack {
             duration: 0.525,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 0.525, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1765,6 +1774,7 @@ mod tests {
             config.emitter.spawn_burst_size = 2;
             config.emitter_track = Some(EmitterTrack {
                 duration: 1.0,
+                preroll: 0.0,
                 keyframes: vec![
                     EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                     EmitterKeyframe { time: 1.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1799,6 +1809,7 @@ mod tests {
             config.emitter.spawn_burst_size = 2;
             config.emitter_track = Some(EmitterTrack {
                 duration,
+                preroll: 0.0,
                 keyframes: vec![
                     EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                     EmitterKeyframe { time: duration, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
@@ -1824,6 +1835,7 @@ mod tests {
         config.emitter.spawn_burst_size = 4;
         config.emitter_track = Some(EmitterTrack {
             duration: 0.525,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
                 EmitterKeyframe { time: 1.0, x: 1000.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },

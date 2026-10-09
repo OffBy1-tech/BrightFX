@@ -88,6 +88,7 @@ mod tests {
         let mut config = ParticleFxConfig::default();
         config.emitter_track = Some(EmitterTrack {
             duration: 10.0,
+            preroll: 0.0,
             keyframes: vec![
                 EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: None, vy: None },
                 EmitterKeyframe { time: 5.0, x: 1920.0, y: 540.0, vx: Some(96.0), vy: Some(-27.0) },
