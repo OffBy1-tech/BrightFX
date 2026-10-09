@@ -44,6 +44,7 @@ fn seeking_on_out_of_the_preroll_is_bit_identical_to_a_fresh_seek() {
     forward.seek(FORWARD_TIME);
     let mut fresh = load_sim_for(CONFIG, SEED);
     fresh.seek(FORWARD_TIME);
+    assert!(forward.particle_count() > 0, "pool is empty after leaving the pre-roll: the comparison would be vacuous");
     assert_eq!(fresh.particle_count(), forward.particle_count());
     assert_eq!(bits(fresh.buffer_slice()), bits(forward.buffer_slice()), "not bit-identical");
 }
