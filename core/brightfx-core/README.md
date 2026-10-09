@@ -34,8 +34,15 @@ exactly once.
     between; any other call sequence (a backward seek, or any `advance`,
     `trigger_burst`, `set_emitter`, `set_config`, or a `set_bounds` that changes
     the size since) resets and
-    replays from t=0. Both paths run the same whole steps, so the buffer
+    replays from the start of the track. Both paths run the same whole steps, so the buffer
     is a pure function of `time`. No-op without a track.
+    With `emitter_track.preroll` (schema version 5) the track's timeline
+    starts that many seconds before t=0, and a replay starts there, so
+    `seek(0)` returns the pool after that much playback. Keyframes and
+    triggers may be authored at negative times down to `-preroll`; a
+    trigger earlier than that fires at the start. `time` still clamps at
+    0: the pre-roll is simulated, never rendered. Capped at 60 s
+    (`MAX_PREROLL`).
 
     The snap tolerance grows with `time` (it tracks the f32 rounding of
     `time` itself), so a `time` just *after* a grid point can snap down
@@ -175,6 +182,20 @@ bounds, or `set_config` with any config, also culls the live pool at once, by
 the same rule, and permanently: growing the bounds or restoring a larger
 `cullMargin` does not bring particles back. If a host calls both
 `set_viewport` and `set_bounds`, the last call wins.
+
+## Pre-roll
+
+A baked effect's pool is empty at t=0 unless its track says otherwise. A
+rain takes a few seconds to fill a frame, so a composition that shows it
+in its first seconds would get an empty lower frame filling up (#19).
+`emitterTrack.preroll` (schema version 5) extends the timeline before t=0
+by that many seconds. The grid stays anchored at t=0 and the pre-roll adds
+`grid_step(preroll)` whole steps in front of it, so a pre-rolled track is
+bit-identical to the same track with every time moved later by the
+pre-roll (`a_prerolled_track_is_the_same_track_started_earlier`). The
+presets each pre-roll one full `lifetimeMax`, which is a steady-state
+pool by construction: every particle alive at t=0 was born within the last
+`lifetimeMax` steps.
 
 ## Color modes
 
