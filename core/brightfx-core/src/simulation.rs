@@ -38,6 +38,19 @@ fn grid_tolerance(target: f32) -> f64 {
     GRID_TOLERANCE_ABS + GRID_TOLERANCE_REL * target as f64
 }
 
+/// The same snap-then-ceil rule as `grid_step`, applied to a signed value
+/// in f64: -0.5 s maps to -30 and -0.49 s to -29 (the grid point at or
+/// after). Trigger times before t=0 resolve through this.
+fn signed_grid_step(target: f32) -> i64 {
+    let steps = target as f64 * GRID_RATE;
+    let nearest = steps.round();
+    if (steps - nearest).abs() <= grid_tolerance(target.abs()) {
+        nearest as i64
+    } else {
+        steps.ceil() as i64
+    }
+}
+
 /// The grid step a baked time maps to: the grid point *at or after*
 /// `target`. Computed in f64 so the f32 rounding of `target` itself is
 /// the only error -- a time within a few of its own ULPs of a grid point
@@ -54,19 +67,6 @@ fn grid_tolerance(target: f32) -> f64 {
 /// is nearer the point than `target` is, so it snaps to the same step and
 /// has fired. What a downward snap does move is the particle state, which
 /// then sits slightly *before* `target` -- see `seek`.
-/// `grid_step` for a signed time: the same snap-then-ceil rule applied in
-/// f64, so -0.5 s maps to -30 and -0.49 s to -29 (the grid point at or
-/// after). Trigger times before t=0 resolve through this.
-fn signed_grid_step(target: f32) -> i64 {
-    let steps = target as f64 * GRID_RATE;
-    let nearest = steps.round();
-    if (steps - nearest).abs() <= grid_tolerance(target.abs()) {
-        nearest as i64
-    } else {
-        steps.ceil() as i64
-    }
-}
-
 fn grid_step(target: f32) -> u32 {
     // Saturates, as the old f64-to-u32 `as` cast did: a plain `as u32` on
     // the i64 would truncate, wrapping a huge time back onto the track.

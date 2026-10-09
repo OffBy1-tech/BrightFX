@@ -673,6 +673,14 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_preroll_scatter_starts_at_positive_zero() {
+        let track = scatter_sweep(0.0, 100.0, 0.5, 0.0);
+        assert_eq!(track.preroll, 0.0);
+        assert_eq!(track.triggers[0].time, 0.0);
+        assert!(track.triggers[0].time.is_sign_positive(), "a zero pre-roll must write 0.0, not -0.0");
+    }
+
+    #[test]
     fn a_preroll_extends_the_scatter_backwards_and_starts_emission_there() {
         let track = scatter_sweep(0.0, 100.0, 0.5, 1.2);
         assert_eq!(track.preroll, 1.2);

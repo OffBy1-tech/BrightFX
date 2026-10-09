@@ -133,7 +133,10 @@ fn every_preset_loads_unclamped_and_emits() {
         // One trigger, at the start of the pre-roll, and nothing after it:
         // a second trigger (a stop, a burst) would let the track decide
         // when the preset shows, which is the composition's job.
-        let preroll = config["emitterTrack"]["preroll"].as_f64().unwrap() as f32;
+        let preroll = config["emitterTrack"]["preroll"]
+            .as_f64()
+            .unwrap_or_else(|| panic!("{name}: emitterTrack.preroll is missing from the shipped JSON"))
+            as f32;
         assert_eq!(preroll, config["lifetimeMax"].as_f64().unwrap() as f32 / 60.0, "{name}: pre-roll is one lifetime");
         let triggers = config["emitterTrack"]["triggers"].as_array().unwrap();
         assert_eq!(triggers.len(), 1, "{name}: expected exactly one trigger, got {triggers:?}");
