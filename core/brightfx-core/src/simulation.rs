@@ -68,7 +68,9 @@ fn signed_grid_step(target: f32) -> i64 {
 }
 
 fn grid_step(target: f32) -> u32 {
-    signed_grid_step(target.max(0.0)) as u32
+    // Saturates, as the old f64-to-u32 `as` cast did: a plain `as u32` on
+    // the i64 would truncate, wrapping a huge time back onto the track.
+    u32::try_from(signed_grid_step(target.max(0.0))).unwrap_or(u32::MAX)
 }
 
 /// One of the track's triggers with the step it fires in resolved ahead
@@ -154,7 +156,9 @@ pub struct Simulation {
     emitter_speed: f32,
     emitter_active: bool,
     buffer: Vec<ParticleInstance>,
-    /// Absolute whole steps applied since the last reset in baked mode (step 0 is the start of the pre-roll, see BakedTrack::preroll_steps). `None`
+    /// Absolute whole steps applied since the last reset in baked mode
+    /// (step 0 is the start of the pre-roll, see
+    /// `BakedTrack::preroll_steps`). `None`
     /// whenever the pool is not the product of a pure replay, so the next
     /// `seek` replays from zero. Only `seek` sets it; everything else
     /// clears it through `leave_baked`.
@@ -452,7 +456,9 @@ impl Simulation {
     /// there is no pre-roll) and fires the `fire_step == 0` triggers --
     /// those authored at or before the start. Baked playback requires an
     /// explicit `StartContinuous` (or a `Burst`) to spawn anything --
-    /// unlike live mode, seek never implicitly emits from t=0.
+    /// unlike live mode, seek never implicitly emits from t=0. The emitter
+    /// is placed at `-preroll` exactly, while the first step's grid time is
+    /// the grid point at or after it (off-grid, up to a step earlier).
     fn restart_track(&mut self, track: &BakedTrack) {
         self.reset();
         let (x0, y0, vx0, vy0) = sample_track(&track.keyframes, -track.preroll);
@@ -856,7 +862,12 @@ fn build_baked_track(config: &ParticleFxConfig) -> Option<Arc<BakedTrack>> {
             let fire_step = if trig.time <= -preroll {
                 0
             } else {
-                (preroll_steps as i64 + signed_grid_step(trig.time)).max(0) as u32
+                // Saturating, like `grid_step`: an unclamped time near
+                // `i64::MAX` steps must neither overflow the add nor wrap
+                // back onto the track.
+                (preroll_steps as i64)
+                    .saturating_add(signed_grid_step(trig.time))
+                    .clamp(0, u32::MAX as i64) as u32
             };
             BakedTrigger { fire_step, kind: trig.kind }
         })
@@ -1371,6 +1382,57 @@ mod tests {
             for p in sim.buffer() {
                 assert!((p.x + 30.0).abs() < 2.5, "burst at {time}: x was {}", p.x);
             }
+        }
+    }
+
+    #[test]
+    fn a_trigger_far_beyond_any_track_never_fires_without_preroll() {
+        // 71582792.0 s is exact in f32 and is 2^32 + 224 grid steps: a
+        // wrapping i64 -> u32 cast would fire it at step 224 (3.73 s), so
+        // the track is lengthened to let `seek` reach that far.
+        let mut config = burst_only_at(0.0, 71582792.0);
+        config.emitter_track.as_mut().unwrap().duration = 10.0;
+        let mut sim = Simulation::new(config, 5);
+        sim.seek(4.0); // particles live 100 steps: stop just past step 224
+        assert_eq!(sim.particle_count(), 0);
+    }
+
+    #[test]
+    fn an_infinite_trigger_time_neither_panics_nor_fires() {
+        let mut config = burst_only_at(0.5, f32::MAX);
+        config
+            .emitter_track
+            .as_mut()
+            .unwrap()
+            .triggers
+            .push(EmitterTrigger { time: f32::INFINITY, kind: TriggerKind::Burst });
+        let mut sim = Simulation::new(config, 5);
+        sim.seek(1.0);
+        assert_eq!(sim.particle_count(), 0);
+    }
+
+    #[test]
+    fn a_trigger_at_an_off_grid_preroll_start_fires_at_the_reset() {
+        // Pre-roll 0.505 s is 30.3 steps, so S = 31 and the grid's first
+        // point (-31/60 s) lies before -0.505 s. A burst at -0.505 s is
+        // pinned to step 0 by the `time <= -preroll` branch; through the
+        // grid it would resolve to step 1, which fires just before the
+        // first step with the emitter already moved to the first grid time.
+        // Age cannot tell the two apart (both see all 31 steps), so the
+        // emitter does: it runs from x=0 at -0.505 s to x=1000 at -0.4 s,
+        // so at the reset it is at 0 but at -0.5 s (grid time of step 1) it
+        // is at ~47.6.
+        let mut config = burst_only_at(0.505, -0.505);
+        let track = config.emitter_track.as_mut().unwrap();
+        track.keyframes = vec![
+            EmitterKeyframe { time: -0.505, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+            EmitterKeyframe { time: -0.4, x: 1000.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+        ];
+        let mut sim = Simulation::new(config, 5);
+        sim.seek(0.0);
+        assert_eq!(sim.particle_count(), 3);
+        for p in sim.buffer() {
+            assert!(p.x.abs() < 2.5, "burst fired after the reset: x was {}", p.x);
         }
     }
 
