@@ -180,6 +180,15 @@ pub const MAX_EMITTER_TRACK_DURATION: f32 = 600.0;
 /// generators (`brightfx-tracks`) clamp the same way the core does.
 pub const MAX_PREROLL: f32 = 60.0;
 
+/// `preroll` as the core reads it: `0..=MAX_PREROLL`, 0 if not finite.
+pub fn sanitize_preroll(preroll: f32) -> f32 {
+    if preroll.is_finite() {
+        preroll.clamp(0.0, MAX_PREROLL)
+    } else {
+        0.0
+    }
+}
+
 /// Upper bound on `cullMargin`, in logical px. A sanity limit, well past any
 /// real frame (`MAX_VIEWPORT_SIDE` is 8192 device px), not a numeric one.
 const MAX_CULL_MARGIN: f32 = 10_000.0;
@@ -360,7 +369,7 @@ impl ParticleFxConfig {
         // Not through `clamp`: a NaN survives `f32::clamp` and the equality
         // test there, and a pre-roll must be a real number of steps.
         if let Some(track) = self.emitter_track.as_mut() {
-            let preroll = if track.preroll.is_finite() { track.preroll.clamp(0.0, MAX_PREROLL) } else { 0.0 };
+            let preroll = sanitize_preroll(track.preroll);
             if preroll.to_bits() != track.preroll.to_bits() {
                 track.preroll = preroll;
                 changed.push("emitterTrack.preroll");

@@ -3,7 +3,8 @@ use crate::particle::{Particle, ParticlePool, MAX_PARTICLES};
 use crate::rng::Rng;
 use crate::schema::{
     ColorMode, SpinDirection, EmissionPattern, EmitterKeyframe, ParticleFxConfig, TriggerKind,
-    MAX_EMITTER_TRACK_DURATION, MAX_PREROLL,
+    MAX_EMITTER_TRACK_DURATION,
+    sanitize_preroll,
 };
 use std::sync::Arc;
 
@@ -846,10 +847,19 @@ fn build_baked_track(config: &ParticleFxConfig) -> Option<Arc<BakedTrack>> {
     // propagate it.
     #[allow(clippy::manual_clamp)]
     let duration_cap = track.duration.max(0.0).min(MAX_EMITTER_TRACK_DURATION);
-    let preroll = if track.preroll.is_finite() { track.preroll.clamp(0.0, MAX_PREROLL) } else { 0.0 };
+    let preroll = sanitize_preroll(track.preroll);
     let preroll_steps = grid_step(preroll);
 
+    // `sample_track` assumes ascending time, and the authoring order is
+    // free (a pre-roll keyframe is naturally appended after the t >= 0
+    // ones). A stable sort, like the triggers'.
+    let mut keyframes = track.keyframes.clone();
+    keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+
     let mut triggers = track.triggers.clone();
+    // A NaN time makes the partial-order sort non-transitive and would fire
+    // at t=0; a non-finite trigger has no step.
+    triggers.retain(|t| t.time.is_finite());
     triggers.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
     // `signed_grid_step` is monotonic in its argument, so chronological
     // order is also fire-step order. A trigger at or before the start of
@@ -873,7 +883,7 @@ fn build_baked_track(config: &ParticleFxConfig) -> Option<Arc<BakedTrack>> {
         })
         .collect();
 
-    Some(Arc::new(BakedTrack { keyframes: track.keyframes.clone(), triggers, duration_cap, preroll, preroll_steps }))
+    Some(Arc::new(BakedTrack { keyframes, triggers, duration_cap, preroll, preroll_steps }))
 }
 
 #[cfg(test)]
@@ -1727,6 +1737,70 @@ mod tests {
         let mut sim = Simulation::new(base_config(), 1);
         sim.seek(1.0);
         assert_eq!(sim.particle_count(), 0);
+    }
+
+    #[test]
+    fn keyframes_are_sampled_in_time_order_however_authored() {
+        // A pre-roll keyframe appended after the t >= 0 ones is the natural
+        // edit; `sample_track` needs ascending time, so baking sorts them.
+        // Sorted, the path runs x=-60 (t=-1) -> 0 (t=0) -> 60 (t=1), so a
+        // burst at -0.5 s spawns at x=-30.
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 0.0;
+        config.emitter.spawn_burst_size = 3;
+        config.lifetime_min = 100.0;
+        config.lifetime_max = 100.0;
+        config.emitter_track = Some(EmitterTrack {
+            duration: 1.0,
+            preroll: 1.0,
+            keyframes: vec![
+                EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+                EmitterKeyframe { time: 1.0, x: 60.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+                EmitterKeyframe { time: -1.0, x: -60.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+            ],
+            triggers: vec![EmitterTrigger { time: -0.5, kind: TriggerKind::Burst }],
+        });
+        let mut sim = Simulation::new(config, 3);
+        sim.seek(0.0);
+        assert_eq!(sim.particle_count(), 3);
+        for (p, inst) in sim.buffer().iter().enumerate() {
+            assert!((inst.x - -30.0).abs() < 2.5, "particle {p} at x={}, expected about -30", inst.x);
+        }
+    }
+
+    #[test]
+    fn a_non_finite_trigger_time_is_dropped() {
+        // A NaN trigger used to sort as "equal" to everything and resolve to
+        // step 0, firing a burst at the reset. It has no step, so it is
+        // dropped.
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 2.0;
+        config.emitter.spawn_burst_size = 3;
+        config.lifetime_min = 100.0;
+        config.lifetime_max = 100.0;
+        config.emitter_track = Some(EmitterTrack {
+            duration: 1.0,
+            preroll: 0.0,
+            keyframes: vec![
+                EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+                EmitterKeyframe { time: 1.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+            ],
+            triggers: vec![
+                EmitterTrigger { time: f32::NAN, kind: TriggerKind::Burst },
+                EmitterTrigger { time: 0.2, kind: TriggerKind::StopContinuous },
+                EmitterTrigger { time: 0.1, kind: TriggerKind::StartContinuous },
+            ],
+        });
+        let mut sim = Simulation::new(config, 3);
+        sim.seek(0.0);
+        assert_eq!(sim.particle_count(), 0, "the NaN burst must not fire at the reset");
+
+        // Start fires at step 6 and Stop at step 12; a trigger at step k
+        // applies before the step that spawns, so steps 6..12 are active:
+        // 6 steps. `step` adds rate * fe = 2.0 * 1.0 to the spawn budget
+        // and spawns floor(2.0) = 2 per step: 6 * 2 = 12.
+        sim.seek(0.5);
+        assert_eq!(sim.particle_count(), 12);
     }
 
     #[test]

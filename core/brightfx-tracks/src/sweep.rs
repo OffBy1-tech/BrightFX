@@ -1,5 +1,5 @@
 use brightfx_core::schema::{EmitterKeyframe, EmitterTrack, EmitterTrigger, TriggerKind};
-use brightfx_core::{MAX_EMITTER_TRACK_DURATION, MAX_PREROLL, PLAYBACK_STEP};
+use brightfx_core::{sanitize_preroll, MAX_EMITTER_TRACK_DURATION, PLAYBACK_STEP};
 
 /// Shortest sweep period the core can actually play back.
 ///
@@ -86,19 +86,10 @@ pub fn sweep_track(a: (f32, f32), b: (f32, f32), period: f32, duration: f32, pre
     }
 }
 
-/// `preroll` as the core will read it: `0..=MAX_PREROLL`, 0 if not finite.
-pub(crate) fn sanitize_preroll(preroll: f32) -> f32 {
-    if preroll.is_finite() {
-        preroll.clamp(0.0, MAX_PREROLL)
-    } else {
-        0.0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brightfx_core::{ParticleFxConfig, Simulation};
+    use brightfx_core::{ParticleFxConfig, Simulation, MAX_PREROLL};
 
     #[test]
     fn alternates_between_the_two_ends_every_half_period() {
