@@ -1,10 +1,12 @@
 # Emitter Track Pre-roll Implementation Plan
 
+> **Status:** shipped in #36. Review changed one rule after this plan: every preset pre-rolls `PRESET_PREROLL` (5 s, the `lifetimeMax` ceiling), not its own `lifetimeMax / 60`. The spec has the reasoning.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let an effect file declare that its baked timeline began before t=0, so `seek(0)` returns a steady-state pool (closes #19).
 
-**Architecture:** `emitterTrack.preroll` (seconds) extends the timeline to `-preroll`; keyframes and triggers may carry negative times. The 1/60 s grid stays anchored at authored t=0 and the pre-roll adds `S = grid_step(preroll)` whole steps in front of it, so step indices become absolute (0 is the start of pre-roll, `S` is t=0). Generators extend their paths backwards and every preset sets `preroll = lifetimeMax / 60`. Spec: `docs/superpowers/specs/2026-10-08-emitter-track-preroll-design.md`.
+**Architecture:** `emitterTrack.preroll` (seconds) extends the timeline to `-preroll`; keyframes and triggers may carry negative times. The 1/60 s grid stays anchored at authored t=0 and the pre-roll adds `S = grid_step(preroll)` whole steps in front of it, so step indices become absolute (0 is the start of pre-roll, `S` is t=0). Generators extend their paths backwards and every preset sets `preroll = lifetimeMax / 60`. Spec: `docs/specs/2026-10-08-emitter-track-preroll-design.md`.
 
 **Tech Stack:** Rust (brightfx-core, brightfx-tracks), serde/schemars, cross-language fixtures replayed by Node (wasm-pack), Swift, and C# harnesses, TypeScript types in brightfx-js.
 
@@ -1542,7 +1544,7 @@ A baked effect started at t=0 with an empty pool, so a rain shown in a compositi
 - Fixtures: new `ffi-preroll` replayed by Node, Swift, and C#. Every existing fixture is bit-identical. All seven golden frames regenerated.
 - Acceptance test: each preset's pool at `seek(0)` sits inside its steady-state census band.
 
-Spec: `docs/superpowers/specs/2026-10-08-emitter-track-preroll-design.md`.
+Spec: `docs/specs/2026-10-08-emitter-track-preroll-design.md`.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 PR

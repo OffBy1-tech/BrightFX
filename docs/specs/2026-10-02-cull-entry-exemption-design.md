@@ -82,7 +82,7 @@ removes both problems.
 
 ## Documentation changes
 
-- `docs/superpowers/specs/2026-10-02-cull-particles-outside-viewport-design.md`:
+- `docs/specs/2026-10-02-cull-particles-outside-viewport-design.md`:
   the Simulation bullet and the Trade-off paragraph.
 - `core/brightfx-core/README.md`, "Culling".
 - The `cull_margin` field doc and the `MAX_CULL_MARGIN` comment in

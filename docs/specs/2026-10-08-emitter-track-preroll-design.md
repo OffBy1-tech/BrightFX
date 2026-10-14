@@ -98,18 +98,22 @@ The track's timeline runs from `-preroll` to `duration`.
   nothing running at t=0.
 - `fit_track` needs no change (it scales x and y only); a test pins that
   `preroll` and negative times pass through.
-- **Every preset sets `preroll = lifetimeMax / 60` seconds.** Every
-  particle alive at t=0 was born within the last `lifetimeMax` frames, so
-  one full lifetime of warm-up is a steady-state pool for any spawn rate,
-  frame size, or cull margin. That is 2 s for confetti, fireflies, and
-  bubbles, 1.5 s for sparkles, 4.67 s for frosting-rain, and 5 s for
-  sprinkle-rain and flight-arc. One rule, no per-preset tuning; at most
-  300 extra steps on the first seek. A `preroll_for(&config)` helper in
-  `presets.rs` derives it so the rule lives in one place.
+- **Every preset sets `preroll` to 5 s (`PRESET_PREROLL`), one lifetime
+  at the `lifetimeMax` ceiling.** Every particle alive at t=0 was born
+  within the last `lifetimeMax` frames, so a full lifetime of warm-up is a
+  steady-state pool for any spawn rate, frame size, or cull margin. One
+  rule, no per-preset tuning; at most 300 extra steps on a seek that
+  starts over.
+  An earlier draft used each preset's own `lifetimeMax / 60` (1.5-5 s). Review
+  found that a host that spreads a preset and raises `lifetimeMax` then
+  gets the half-filled first frame back: the pre-roll is baked into the
+  track's `StartContinuous` and first keyframes, so raising `preroll`
+  alone cannot repair it. The ceiling has no legal edit that outgrows it.
 - The preset invariants in `core/brightfx-tracks/tests/presets.rs`
   change from "one `StartContinuous` at 0" to "one `StartContinuous` at
-  `-preroll`, and `preroll` equals `lifetimeMax / 60`". "Last keyframe
-  lands on the duration" is unchanged.
+  `-preroll`, and `preroll` equals `PRESET_PREROLL`". "Last keyframe
+  lands on the duration" is unchanged. The t=0 steady-state test also
+  covers every preset with `lifetimeMax` raised to 300.
 
 ## Testing
 
