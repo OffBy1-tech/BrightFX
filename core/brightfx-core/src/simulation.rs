@@ -853,14 +853,19 @@ fn build_baked_track(config: &ParticleFxConfig) -> Option<Arc<BakedTrack>> {
 
     // `sample_track` assumes ascending time, and the authoring order is
     // free (a pre-roll keyframe is naturally appended after the t >= 0
-    // ones). A stable sort, like the triggers'.
+    // ones). A NaN time has no place on the path, and leaving it in would
+    // make the partial-order comparison non-transitive, which the standard
+    // sort may panic on. A stable sort, like the triggers'.
     let mut keyframes = track.keyframes.clone();
+    keyframes.retain(|k| !k.time.is_nan());
     keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut triggers = track.triggers.clone();
     // A NaN time makes the partial-order sort non-transitive and would fire
-    // at t=0; a non-finite trigger has no step.
-    triggers.retain(|t| t.time.is_finite());
+    // at t=0, so it is dropped. The infinities keep their meaning: -inf
+    // (what serde reads from a JSON time below about -3.4e38) is "before
+    // the start" and fires at the reset, +inf saturates and never fires.
+    triggers.retain(|t| !t.time.is_nan());
     triggers.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
     // `signed_grid_step` is monotonic in its argument, so chronological
     // order is also fire-step order. A trigger at or before the start of
@@ -1734,6 +1739,48 @@ mod tests {
     }
 
     #[test]
+    fn a_minus_infinite_trigger_time_fires_at_the_start() {
+        // serde reads any JSON time below about -3.4e38 as -inf, and a host
+        // may write -Number.MAX_VALUE for "since forever". It is before the
+        // pre-roll's start, so it fires at the reset like any such trigger.
+        for preroll in [0.0f32, 0.5] {
+            let mut sim = Simulation::new(burst_only_at(preroll, f32::NEG_INFINITY), 5);
+            sim.seek(0.0);
+            assert_eq!(sim.particle_count(), 3, "preroll {preroll}");
+        }
+    }
+
+    #[test]
+    fn a_nan_keyframe_time_is_dropped_without_panicking() {
+        // A NaN time made the keyframe comparison non-transitive, and the
+        // standard sort may panic on that once there are more than about
+        // twenty elements; whether it does depends on the order. So: many
+        // deterministic shuffles of 23 keyframes, two of them NaN. Every
+        // keyframe sits at x=0, so a surviving NaN would show as a NaN x.
+        let times: Vec<f32> =
+            (-6..15).map(|i| i as f32).chain([f32::NAN, f32::NAN]).collect();
+        let mut state = 0x2545_f491_u32;
+        for _ in 0..200 {
+            let mut order = times.clone();
+            for i in (1..order.len()).rev() {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                order.swap(i, (state >> 8) as usize % (i + 1));
+            }
+            let mut config = burst_only_at(6.0, -0.5);
+            config.emitter_track.as_mut().unwrap().keyframes = order
+                .iter()
+                .map(|&time| EmitterKeyframe { time, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) })
+                .collect();
+            let mut sim = Simulation::new(config, 5);
+            sim.seek(0.0);
+            assert_eq!(sim.particle_count(), 3, "order {order:?}");
+            for p in sim.buffer() {
+                assert!(p.x.abs() < 2.5, "order {order:?}: x was {}", p.x);
+            }
+        }
+    }
+
+    #[test]
     fn seek_with_no_track_is_a_no_op() {
         let mut sim = Simulation::new(base_config(), 1);
         sim.seek(1.0);
@@ -1770,7 +1817,7 @@ mod tests {
     }
 
     #[test]
-    fn a_non_finite_trigger_time_is_dropped() {
+    fn a_nan_trigger_time_is_dropped() {
         // A NaN trigger used to sort as "equal" to everything and resolve to
         // step 0, firing a burst at the reset. It has no step, so it is
         // dropped.
