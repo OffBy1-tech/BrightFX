@@ -47,11 +47,16 @@ pub(crate) fn leg_count(duration: f32, leg: f32) -> usize {
 /// t >= 0 are the same with or without a pre-roll. `preroll` is clamped as
 /// the core clamps it (`0..=MAX_PREROLL`, non-finite is 0).
 ///
-/// `period` is floored at [`MIN_SWEEP_PERIOD`] and `duration` is sanitized
+/// `period` is floored at [`MIN_SWEEP_PERIOD`] and capped at `f32::MAX`,
+/// and `duration` is sanitized
 /// into `0..=MAX_EMITTER_TRACK_DURATION` (a non-finite duration becomes 0),
 /// so the result always loads unclamped.
 pub fn sweep_track(a: (f32, f32), b: (f32, f32), period: f32, duration: f32, preroll: f32) -> EmitterTrack {
-    let half = period.max(MIN_SWEEP_PERIOD) / 2.0;
+    // Capped too: an infinite period (a distance over a zero speed) would
+    // put the pre-roll keyframe at `-1 * inf`, a time JSON cannot carry.
+    // At `f32::MAX` the emitter just sits at `a`, as a very slow sweep would.
+    #[allow(clippy::manual_clamp)] // `clamp` would keep a NaN period; `max` floors it
+    let half = period.max(MIN_SWEEP_PERIOD).min(f32::MAX) / 2.0;
     let duration = if duration.is_finite() {
         duration.clamp(0.0, MAX_EMITTER_TRACK_DURATION)
     } else {
@@ -133,6 +138,33 @@ mod tests {
             track.triggers,
             vec![EmitterTrigger { time: -1.0, kind: TriggerKind::StartContinuous }]
         );
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn an_infinite_period_with_a_preroll_parks_the_emitter_at_a() {
+        // `-1 * inf` used to put the pre-roll keyframe at -inf: JSON writes
+        // it as null, and in-process the path sampled as NaN and the
+        // emitter sat at (0, 0) instead of `a`.
+        let track = sweep_track((100.0, 50.0), (200.0, 50.0), f32::INFINITY, 2.0, 1.0);
+        assert!(track.keyframes.iter().all(|k| k.time.is_finite()), "{:?}", track.keyframes);
+        let mut config = ParticleFxConfig::default();
+        config.emitter_track = Some(track);
+        config.emitter.spawn_rate_while_active = 2.0;
+        config.initial_speed_min = 0.0;
+        config.initial_speed_max = 0.0;
+        config.gravity_x = 0.0;
+        config.gravity_y = 0.0;
+        config.turbulence = 0.0;
+        config.lifetime_min = 300.0;
+        config.lifetime_max = 300.0;
+        let json = serde_json::to_string(&config).unwrap();
+        let mut sim = Simulation::new(serde_json::from_str(&json).unwrap(), 7);
+        sim.seek(1.0);
+        assert!(sim.particle_count() > 0, "vacuous");
+        for p in sim.buffer() {
+            assert!((p.x - 100.0).abs() < 2.5 && (p.y - 50.0).abs() < 2.5, "particle at ({}, {})", p.x, p.y);
+        }
     }
 
     #[test]

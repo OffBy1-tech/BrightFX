@@ -202,9 +202,11 @@ returns its burst unstepped; with any pre-roll it fires in the step that
 ends at t=0 and has been stepped once by `seek(0)`, like every other grid
 point. So adding `preroll` to a track with a `Burst` at 0 moves that
 burst's first frame by one step. The
-presets each pre-roll one full `lifetimeMax`, which is a steady-state
-pool by construction: every particle alive at t=0 was born within the last
-`lifetimeMax` steps.
+presets each pre-roll 5 s, one lifetime at the `lifetimeMax` ceiling, which
+is a steady-state pool by construction: every particle alive at t=0 was
+born within the last `lifetimeMax` steps. The ceiling rather than each
+preset's own lifetime, because the pre-roll is baked into the track and a
+host that raises `lifetimeMax` cannot lengthen it with one field.
 
 ## Color modes
 

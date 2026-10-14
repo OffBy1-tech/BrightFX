@@ -4,9 +4,10 @@
 //! 1920×1080 pixel frame and carries a `MAX_EMITTER_TRACK_DURATION` track
 //! with one `StartContinuous` at the start of its pre-roll, so `amount`
 //! and `window` in the composition, not the track, decide when it shows.
-//! The pre-roll is one full `lifetimeMax` (`preroll_for`), so the first
-//! frame a composition shows is already the steady state rather than an
-//! empty frame filling up.
+//! The pre-roll is `PRESET_PREROLL`, one lifetime at the `lifetimeMax`
+//! ceiling, so the first frame a composition shows is already the steady
+//! state rather than an empty frame filling up -- even after a host raises
+//! a preset's `lifetimeMax`.
 //!
 //! The core spawns within ±2 px of the emitter, so presets that cover an
 //! area move the emitter: `sweep_track` for an edge, `scatter_sweep` for
@@ -143,8 +144,7 @@ fn palette(colors: &[&str]) -> Option<Vec<ColorStop>> {
 }
 
 /// `icon` is one short word a picker can show; it is per preset, so the
-/// library does not present seven identical tiles. The track is attached
-/// last, by `with_track`, once the fields its pre-roll depends on are set.
+/// library does not present seven identical tiles.
 fn base(id: &str, name: &str, description: &str, icon: &str) -> ParticleFxConfig {
     ParticleFxConfig {
         id: id.into(),
@@ -157,22 +157,18 @@ fn base(id: &str, name: &str, description: &str, icon: &str) -> ParticleFxConfig
     }
 }
 
-/// The pre-roll a preset needs to be at steady state at t=0: one full
-/// `lifetimeMax`, in seconds (lifetimes are in 1/60 s steps). Every
-/// particle alive at t=0 was born within the last `lifetimeMax` steps, so
-/// after that long the pool is what it will be from then on, for any spawn
-/// rate, frame size, or cull margin.
-pub fn preroll_for(config: &ParticleFxConfig) -> f32 {
-    config.lifetime_max / 60.0
-}
-
-/// Attaches the track `make` generates for the config's own pre-roll.
-/// Called last in every preset, after `lifetime_max` is set.
-fn with_track(mut config: ParticleFxConfig, make: impl FnOnce(f32) -> EmitterTrack) -> ParticleFxConfig {
-    let preroll = preroll_for(&config);
-    config.emitter_track = Some(make(preroll));
-    config
-}
+/// Every preset's pre-roll: one lifetime at the `lifetimeMax` ceiling (300
+/// steps, 5 s). Every particle alive at t=0 was born within the last
+/// `lifetimeMax` steps, so after that long the pool is what it will be from
+/// then on, for any spawn rate, frame size, or cull margin.
+///
+/// The ceiling rather than each preset's own `lifetimeMax`: the pre-roll is
+/// baked into the track (its `StartContinuous` and its first keyframes sit
+/// at `-preroll`), so a host that spreads a preset and raises `lifetimeMax`
+/// cannot lengthen it by editing one field. At the ceiling no legal edit
+/// outgrows it. The cost is at most 300 replay steps on a seek that starts
+/// over.
+pub const PRESET_PREROLL: f32 = 300.0 / 60.0;
 
 fn emitter(rate: f32, burst: u32, pattern: EmissionPattern, angle: f32, spread: f32) -> EmitterConfig {
     EmitterConfig {
@@ -238,7 +234,8 @@ pub fn confetti() -> ParticleFxConfig {
     c.start_alpha = 1.0;
     c.peak_alpha = 1.0;
     c.end_alpha = 0.0;
-    with_track(c, |preroll| scatter_sweep(-40.0, FRAME_H, 0.15, preroll))
+    c.emitter_track = Some(scatter_sweep(-40.0, FRAME_H, 0.15, PRESET_PREROLL));
+    c
 }
 
 /// Soft yellow glows over the top 85% of the frame: `Fireflies`, 22 dots
@@ -274,7 +271,8 @@ pub fn fireflies() -> ParticleFxConfig {
     c.start_alpha = 0.0;
     c.peak_alpha = 1.0;
     c.end_alpha = 0.0;
-    with_track(c, |preroll| scatter_sweep(0.0, FRAME_H * 0.85, 0.08, preroll))
+    c.emitter_track = Some(scatter_sweep(0.0, FRAME_H * 0.85, 0.08, PRESET_PREROLL));
+    c
 }
 
 /// White-to-gold stars drifting up and fading. The effect it replaces
@@ -323,7 +321,8 @@ pub fn sparkles() -> ParticleFxConfig {
     c.start_alpha = 0.0;
     c.peak_alpha = 1.0;
     c.end_alpha = 0.0;
-    with_track(c, |preroll| scatter_sweep(0.0, FRAME_H, 0.08, preroll))
+    c.emitter_track = Some(scatter_sweep(0.0, FRAME_H, 0.08, PRESET_PREROLL));
+    c
 }
 
 /// Rainbow capsules falling from just above the top edge, after
@@ -392,7 +391,8 @@ pub fn sprinkle_rain() -> ParticleFxConfig {
     c.start_alpha = 0.95;
     c.peak_alpha = 0.95;
     c.end_alpha = 0.95;
-    with_track(c, |preroll| scatter_sweep(-RAIN_EDGE, -RAIN_EDGE, 0.1, preroll))
+    c.emitter_track = Some(scatter_sweep(-RAIN_EDGE, -RAIN_EDGE, 0.1, PRESET_PREROLL));
+    c
 }
 
 /// Pink frosting drops raining from the top edge, after `FrostingRain`'s
@@ -465,7 +465,8 @@ pub fn frosting_rain() -> ParticleFxConfig {
     c.start_alpha = 0.95;
     c.peak_alpha = 0.95;
     c.end_alpha = 0.95;
-    with_track(c, |preroll| sweep_track((0.0, -RAIN_EDGE), (FRAME_W, -RAIN_EDGE), 0.5, TRACK_DURATION, preroll))
+    c.emitter_track = Some(sweep_track((0.0, -RAIN_EDGE), (FRAME_W, -RAIN_EDGE), 0.5, TRACK_DURATION, PRESET_PREROLL));
+    c
 }
 
 /// Pale bubbles rising from the bottom edge: `GriddleBubbles`, ten large
@@ -501,7 +502,8 @@ pub fn bubbles() -> ParticleFxConfig {
     c.start_alpha = 0.9;
     c.peak_alpha = 0.9;
     c.end_alpha = 0.0;
-    with_track(c, |preroll| sweep_track((0.0, FRAME_H + 20.0), (FRAME_W, FRAME_H + 20.0), 0.6, TRACK_DURATION, preroll))
+    c.emitter_track = Some(sweep_track((0.0, FRAME_H + 20.0), (FRAME_W, FRAME_H + 20.0), 0.6, TRACK_DURATION, PRESET_PREROLL));
+    c
 }
 
 /// Sprite-mode preset: the motion of the flying donuts, pancakes, notes,
@@ -561,7 +563,8 @@ pub fn flight_arc() -> ParticleFxConfig {
     c.start_alpha = 1.0;
     c.peak_alpha = 1.0;
     c.end_alpha = 1.0;
-    with_track(c, |preroll| sweep_track((-100.0, FRAME_H * 0.43), (-100.0, FRAME_H * 0.6), 3.0, TRACK_DURATION, preroll))
+    c.emitter_track = Some(sweep_track((-100.0, FRAME_H * 0.43), (-100.0, FRAME_H * 0.6), 3.0, TRACK_DURATION, PRESET_PREROLL));
+    c
 }
 
 /// Every preset, by file stem, in the order they are documented.
@@ -695,14 +698,15 @@ mod tests {
     }
 
     #[test]
-    fn every_preset_prerolls_one_full_lifetime() {
+    fn every_preset_prerolls_one_lifetime_at_the_ceiling() {
         // Every particle alive at t=0 was born within the last `lifetimeMax`
-        // steps, so one full lifetime of warm-up is a steady-state pool for
-        // any spawn rate, frame size, or cull margin. One rule, no tuning.
+        // steps, so a pre-roll of the longest legal lifetime is a
+        // steady-state pool for any spawn rate, frame size, cull margin, or
+        // host edit to `lifetimeMax`. One rule, no tuning.
         for (name, config) in library() {
             let track = config.emitter_track.as_ref().expect("every preset carries a track");
-            assert_eq!(track.preroll, config.lifetime_max / 60.0, "{name}");
-            assert_eq!(track.preroll, preroll_for(&config), "{name}");
+            assert_eq!(track.preroll, PRESET_PREROLL, "{name}");
+            assert!(config.lifetime_max / 60.0 <= PRESET_PREROLL, "{name}");
             assert_eq!(
                 track.triggers,
                 vec![EmitterTrigger { time: -track.preroll, kind: TriggerKind::StartContinuous }],
