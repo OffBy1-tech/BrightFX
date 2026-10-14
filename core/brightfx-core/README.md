@@ -197,6 +197,10 @@ pre-roll: bit-identical with a parked emitter
 samples its path at times that differ only by f32 rounding and, for an
 off-grid pre-roll, by the gap to the next grid point
 (`a_prerolled_track_follows_its_path_through_the_preroll`, held to 1e-3).
+The state at the end of the pre-roll depends only on the config, the seed,
+and the bounds, so `seek` keeps it, and a replay that starts over (a
+backward scrub, a seek after a live call) resumes from it rather than
+re-running the pre-roll. `set_config` and a change of bounds drop it.
 With no pre-roll, a trigger authored at t=0 fires at the reset and `seek(0)`
 returns its burst unstepped; with any pre-roll it fires in the step that
 ends at t=0 and has been stepped once by `seek(0)`, like every other grid

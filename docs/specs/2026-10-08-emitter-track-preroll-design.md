@@ -102,8 +102,11 @@ The track's timeline runs from `-preroll` to `duration`.
   at the `lifetimeMax` ceiling.** Every particle alive at t=0 was born
   within the last `lifetimeMax` frames, so a full lifetime of warm-up is a
   steady-state pool for any spawn rate, frame size, or cull margin. One
-  rule, no per-preset tuning; at most 300 extra steps on a seek that
-  starts over.
+  rule, no per-preset tuning. The 300 extra steps are paid once per
+  config and bounds: `seek` keeps the state at the end of the pre-roll,
+  which depends only on the config, seed, and bounds, and a backward seek
+  resumes from it (added after review, which measured a 1.5 ms pre-roll
+  replay in wasm on every backward scrub).
   An earlier draft used each preset's own `lifetimeMax / 60` (1.5-5 s). Review
   found that a host that spreads a preset and raises `lifetimeMax` then
   gets the half-filled first frame back: the pre-roll is baked into the

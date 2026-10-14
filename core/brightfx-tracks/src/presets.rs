@@ -149,8 +149,9 @@ fn base(id: &str, name: &str, description: &str, icon: &str) -> ParticleFxConfig
 /// baked into the track (its `StartContinuous` and its first keyframes sit
 /// at `-preroll`), so a host that spreads a preset and raises `lifetimeMax`
 /// cannot lengthen it by editing one field. At the ceiling no legal edit
-/// outgrows it. The cost is at most 300 replay steps on a seek that starts
-/// over.
+/// outgrows it. The cost is 300 replay steps, paid once per config and
+/// bounds: `seek` keeps the state at the end of the pre-roll and later
+/// replays resume from it.
 pub const PRESET_PREROLL: f32 = 300.0 / 60.0;
 
 fn emitter(rate: f32, burst: u32, pattern: EmissionPattern, angle: f32, spread: f32) -> EmitterConfig {

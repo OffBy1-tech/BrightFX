@@ -40,6 +40,7 @@ pub(crate) struct Particle {
     pub entered: bool,
 }
 
+#[derive(Clone)]
 pub(crate) struct ParticlePool {
     particles: VecDeque<Particle>,
     capacity: usize,
