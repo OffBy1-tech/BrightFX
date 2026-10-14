@@ -121,7 +121,7 @@ The track's timeline runs from `-preroll` to `duration`.
   produces the same buffer as the same track with every
   keyframe and trigger time shifted by +P and `preroll` 0, seeked to
   t + P: bit for bit with a parked emitter; a moving emitter to the
-  fixture tolerance, because the shifted track samples its path at times
+  1e-3 tolerance, because the shifted track samples its path at times
   that round differently. Pre-roll is exactly "the timeline started earlier".
 - **Core, regressions:** forward seek equals fresh seek with pre-roll on;
   a trigger at a negative time fires at its step; one before `-preroll`
@@ -153,7 +153,7 @@ The track's timeline runs from `-preroll` to `duration`.
 - The cross-language blocks run a single forward check against a fresh
   seek instead of a second recorded expected file.
 - The bit-identity property is qualified: bit for bit with a parked
-  emitter, fixture tolerance with a moving one.
+  emitter, 1e-3 with a moving one.
 - The preset census band is widened by a tenth at each end.
 - A trigger at exactly `-preroll` is pinned to step 0.
 

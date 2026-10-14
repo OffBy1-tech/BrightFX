@@ -1,4 +1,5 @@
-//! Scaffolding for `seek_fixture.rs` and `seek_forward_fixture.rs`.
+//! Scaffolding for `seek_fixture.rs`, `seek_forward_fixture.rs` and
+//! `preroll_fixture.rs`.
 
 use super::{assert_within_libm_drift, fixtures_dir, floats, load_or_regenerate, LIBM_DRIFT_TOLERANCE};
 use brightfx_core::abi::AbiSimulation;

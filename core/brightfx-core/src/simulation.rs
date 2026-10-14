@@ -69,9 +69,10 @@ fn signed_grid_step(target: f32) -> i64 {
 /// has fired. What a downward snap does move is the particle state, which
 /// then sits slightly *before* `target` -- see `seek`.
 fn grid_step(target: f32) -> u32 {
-    // Saturates, as the old f64-to-u32 `as` cast did: a plain `as u32` on
-    // the i64 would truncate, wrapping a huge time back onto the track.
-    u32::try_from(signed_grid_step(target.max(0.0))).unwrap_or(u32::MAX)
+    // Saturates both ways, as the trigger steps do: a negative or NaN time
+    // is step 0, and a plain `as u32` on the i64 would truncate, wrapping a
+    // huge time back onto the track.
+    signed_grid_step(target).clamp(0, u32::MAX as i64) as u32
 }
 
 /// One of the track's triggers with the step it fires in resolved ahead
@@ -429,10 +430,11 @@ impl Simulation {
 
         for k in from..n {
             // Grid times are computed from the absolute step index, never
-            // accumulated, so step k is the same on every path. Authored
-            // time is the index less the pre-roll, negative inside it; a
-            // negative product is the exact negation of the positive one,
-            // so a track with no pre-roll gets today's values bit for bit.
+            // accumulated, so step k is the same on every path. `authored`
+            // is the step measured from t=0: negative inside the pre-roll,
+            // exactly `k + 1` without one, so a track with no pre-roll
+            // samples the same small exact integers times the step as it
+            // did before pre-roll existed.
             // The sample is clamped to the duration so the final step of
             // an off-grid track does not extrapolate past the last
             // keyframe window.
@@ -1253,20 +1255,7 @@ mod tests {
         rewound.seek(0.5);
 
         assert!(fresh.particle_count() > 0, "test is vacuous with no particles");
-        // Bitwise, so -0.0 and +0.0 count as different, as they do to the
-        // harnesses, and finite first, since identical NaNs share bits.
-        // Read as the flat floats a host sees, so every field is covered.
-        let bits = |sim: &Simulation| -> Vec<u32> {
-            let buffer = sim.buffer();
-            let len = std::mem::size_of_val(buffer) / std::mem::size_of::<f32>();
-            // SAFETY: `ParticleInstance` is `#[repr(C)]` and all `f32` (its
-            // stride is asserted at compile time), so this is `len`
-            // initialized, aligned f32s.
-            let floats = unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<f32>(), len) };
-            assert!(floats.iter().all(|f| f.is_finite()), "buffer contains NaN or inf");
-            floats.iter().map(|f| f.to_bits()).collect()
-        };
-        assert_eq!(bits(&fresh), bits(&rewound));
+        assert_eq!(buffer_bits(&fresh), buffer_bits(&rewound));
     }
 
     /// Every float of the buffer as bits, read as the flat floats a host
@@ -1328,8 +1317,9 @@ mod tests {
     fn a_prerolled_track_follows_its_path_through_the_preroll() {
         // A moving emitter: the two sample the path at times that differ by
         // the shift, which rounds differently in f32, so this holds to a
-        // tolerance rather than bitwise. 1e-3 is the libm drift tolerance
-        // the fixtures use; the rounding here is far below it.
+        // tolerance rather than bitwise. 1e-3 is half the fixtures' libm
+        // drift tolerance (`LIBM_DRIFT_TOLERANCE`, 2e-3); the rounding here
+        // is far below either.
         for t in [0.0f32, 0.5, 1.0] {
             let mut prerolled = Simulation::new(prerolled_config(0.5, 0.0, -30.0, 60.0), 5);
             prerolled.seek(t);

@@ -48,9 +48,8 @@ pub(crate) fn leg_count(duration: f32, leg: f32) -> usize {
 /// the core clamps it (`0..=MAX_PREROLL`, non-finite is 0).
 ///
 /// `period` is floored at [`MIN_SWEEP_PERIOD`] and capped at `f32::MAX`,
-/// and `duration` is sanitized
-/// into `0..=MAX_EMITTER_TRACK_DURATION` (a non-finite duration becomes 0),
-/// so the result always loads unclamped.
+/// and `duration` is sanitized into `0..=MAX_EMITTER_TRACK_DURATION` (a
+/// non-finite duration becomes 0), so the result always loads unclamped.
 pub fn sweep_track(a: (f32, f32), b: (f32, f32), period: f32, duration: f32, preroll: f32) -> EmitterTrack {
     // Capped too: an infinite period (a distance over a zero speed) would
     // put the pre-roll keyframe at `-1 * inf`, a time JSON cannot carry.
@@ -62,24 +61,41 @@ pub fn sweep_track(a: (f32, f32), b: (f32, f32), period: f32, duration: f32, pre
     } else {
         0.0
     };
+    legged_track(half, duration, preroll, |_, i| if i.rem_euclid(2) == 0 { a } else { b })
+}
+
+/// A track with a keyframe every `leg` seconds from just before `-preroll`
+/// to `duration`, and one `StartContinuous` at `-preroll`: the shape both
+/// `sweep_track` and the presets' scatter path lay down. `at(j, i)` places
+/// keyframe `j`, counted from the track's first keyframe, which sits at leg
+/// `i` from t=0 (negative inside the pre-roll). `preroll` is sanitized as
+/// the core sanitizes it; `leg` and `duration` are the caller's to bound.
+pub(crate) fn legged_track(
+    leg: f32,
+    duration: f32,
+    preroll: f32,
+    mut at: impl FnMut(usize, i64) -> (f32, f32),
+) -> EmitterTrack {
     let preroll = sanitize_preroll(preroll);
 
     // Whole legs before t=0: enough to cover the pre-roll, plus one, so
     // the path reaches past `-preroll` instead of parking the emitter at
     // the first keyframe for the opening fraction of a leg.
-    let before = if preroll > 0.0 { leg_count(preroll, half) + 1 } else { 0 };
-    let count = before + leg_count(duration, half) + 1;
+    let before = if preroll > 0.0 { leg_count(preroll, leg) + 1 } else { 0 };
+    let count = before + leg_count(duration, leg) + 1;
 
-    let mut keyframes = Vec::with_capacity(count);
-    for j in 0..count {
-        let i = j as i64 - before as i64;
-        // `.min(duration)` because a whole leg can land a fraction past the
-        // end (600 s at a 0.3 s leg ends at 600.00006): a keyframe beyond
-        // the track's own duration is one the core would never reach.
-        let time = (i as f32 * half).min(duration);
-        let (x, y) = if i.rem_euclid(2) == 0 { a } else { b };
-        keyframes.push(EmitterKeyframe { time, x, y, vx: Some(0.0), vy: Some(0.0) });
-    }
+    let keyframes = (0..count)
+        .map(|j| {
+            let i = j as i64 - before as i64;
+            // `.min(duration)` because a whole leg can land a fraction past
+            // the end (600 s at a 0.3 s leg ends at 600.00006): a keyframe
+            // beyond the track's own duration is one the core would never
+            // reach.
+            let time = (i as f32 * leg).min(duration);
+            let (x, y) = at(j, i);
+            EmitterKeyframe { time, x, y, vx: Some(0.0), vy: Some(0.0) }
+        })
+        .collect();
     EmitterTrack {
         duration,
         preroll,

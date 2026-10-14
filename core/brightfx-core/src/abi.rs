@@ -187,9 +187,9 @@ impl AbiSimulation {
     /// makes live parameter editing usable; re-seeding is `seek(0)`'s job.
     ///
     /// It does clear the baked position, because the new config may carry
-    /// a different `emitterTrack`: the next `seek` replays from t=0
-    /// rather than stepping forward from a state the new track did not
-    /// produce.
+    /// a different `emitterTrack`: the next `seek` replays from the start
+    /// of the track (its pre-roll before t=0) rather than stepping forward
+    /// from a state the new track did not produce.
     pub fn set_config(&mut self, json: &str) -> String {
         self.guard_mut(|sim| Self::set_config_inner(sim, json))
             .unwrap_or_else(|| err_envelope(POISONED_MESSAGE))
@@ -262,7 +262,7 @@ impl AbiSimulation {
     /// every trigger authored at or before `time` has fired when `time`
     /// is rendered and the simulation may sit up to one step past it. A
     /// forward seek steps from the previous seek; anything else replays
-    /// from t=0. The buffer is a pure function of `time` either way. A
+    /// from the start of the track (its pre-roll before t=0). The buffer is a pure function of `time` either way. A
     /// no-op when the config has no `emitterTrack`.
     pub fn seek(&mut self, time: f32) {
         self.guard_mut(|sim| sim.seek(time));

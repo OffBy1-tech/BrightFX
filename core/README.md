@@ -98,8 +98,9 @@ guards simulation drift; the fixtures guard boundary drift.
   state on every frame (`emitterFrames`) so the harnesses replay numbers
   rather than each re-typing a formula.
 - `fixtures/ffi-seek.*`: the same config with an `emitterTrack`, driven
-  through `seek` alone. This is the only place `seek` crosses the boundary,
-  and the only cross-target coverage of baked timeline playback. It seeks
+  through `seek` alone, and the first of the three fixtures that carry
+  baked timeline playback across the boundary (with `ffi-seek-forward`
+  and `ffi-preroll` below). It seeks
   twice, backwards the second time, so the recorded state cannot depend on
   call history. Regenerated in the forward-seek change: the old replay
   loop accumulated its step time, so its running time undershot each grid

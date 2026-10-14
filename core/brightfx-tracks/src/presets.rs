@@ -53,7 +53,7 @@
 //! particle a colour from the seeded RNG breaks that link wherever the
 //! particle lands.
 
-use brightfx_core::schema::{ColorStop, EmitterKeyframe, EmitterTrack, EmitterTrigger, TriggerKind};
+use brightfx_core::schema::{ColorStop, EmitterTrack};
 use brightfx_core::{
     BlendMode, Category, ColorMode, EmissionPattern, EmitterConfig, ParticleFxConfig, ParticleShape, SizeCurve,
     SpinDirection, MAX_EMITTER_TRACK_DURATION, PLAYBACK_STEP,
@@ -96,31 +96,14 @@ const RAIN_EDGE: f32 = 20.0;
 /// pre-roll moves the pseudo-random path; nothing depends on where it is.
 fn scatter_sweep(y_min: f32, y_max: f32, leg: f32, preroll: f32) -> EmitterTrack {
     let leg = leg.max(PLAYBACK_STEP);
-    let preroll = brightfx_core::sanitize_preroll(preroll);
-    let before = if preroll > 0.0 { crate::sweep::leg_count(preroll, leg) + 1 } else { 0 };
-    let count = before + crate::sweep::leg_count(TRACK_DURATION, leg) + 1;
-    let mut keyframes = Vec::with_capacity(count);
-    for j in 0..count {
-        let i = j as i64 - before as i64;
+    crate::sweep::legged_track(leg, TRACK_DURATION, preroll, |j, _| {
         let j = j as u32;
         // Off the left and right edges by a margin, so the chords cover the
         // frame's own edges instead of turning back at them.
         let fx = ((j * 3571) % 10007) as f32 / 10007.0;
         let fy = ((j * 7919) % 10009) as f32 / 10009.0;
-        keyframes.push(EmitterKeyframe {
-            time: (i as f32 * leg).min(TRACK_DURATION),
-            x: -SCATTER_MARGIN + fx * (FRAME_W + 2.0 * SCATTER_MARGIN),
-            y: y_min + fy * (y_max - y_min),
-            vx: Some(0.0),
-            vy: Some(0.0),
-        });
-    }
-    EmitterTrack {
-        duration: TRACK_DURATION,
-        preroll,
-        keyframes,
-        triggers: vec![EmitterTrigger { time: 0.0 - preroll, kind: TriggerKind::StartContinuous }],
-    }
+        (-SCATTER_MARGIN + fx * (FRAME_W + 2.0 * SCATTER_MARGIN), y_min + fy * (y_max - y_min))
+    })
 }
 
 /// The rainbow the two multicolour presets deal from: eight hues 45°
@@ -592,6 +575,7 @@ pub fn render_json(config: &ParticleFxConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use brightfx_core::schema::{EmitterTrigger, TriggerKind};
 
     #[test]
     fn every_preset_is_inside_the_cores_bounds() {
