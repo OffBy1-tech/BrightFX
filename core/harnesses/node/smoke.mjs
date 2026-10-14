@@ -91,6 +91,24 @@ test("seek reproduces the Rust buffer from a baked track", () => {
   sim.free();
 });
 
+// `sim` has been seeked forward to `time`; a fresh handle seeked straight
+// there must hold the same buffer. Same binary, same steps: bit-identical,
+// no tolerance. `deepStrictEqual` compares with `Object.is`, so -0 and +0
+// differ as they do bitwise; it also treats NaN as equal to NaN, so
+// finiteness is asserted separately. An empty pool would compare vacuously.
+function assertMatchesFreshSeek(sim, configJson, seed, time) {
+  assert.ok(sim.particleCount() > 0, `pool is empty at ${time}: the comparison would be vacuous`);
+  const fresh = new mod.BrightFx(BigInt(seed));
+  applyConfig(fresh, configJson);
+  fresh.seek(time);
+  const forwardFloats = Array.from(readBuffer(sim, mod));
+  const freshFloats = Array.from(readBuffer(fresh, mod));
+  assert.ok(forwardFloats.every(Number.isFinite), "forward-seek buffer is not finite");
+  assert.ok(freshFloats.every(Number.isFinite), "fresh-seek buffer is not finite");
+  assert.deepStrictEqual(freshFloats, forwardFloats);
+  fresh.free();
+}
+
 test("forward seeks reproduce the Rust buffer and match a fresh seek exactly", () => {
   assert.ok(seekForwardExpected.particleCount > 0, "forward-seek fixture is vacuous");
   const forward = new mod.BrightFx(BigInt(seekForwardExpected.seed));
@@ -98,42 +116,23 @@ test("forward seeks reproduce the Rust buffer and match a fresh seek exactly", (
   for (const time of seekForwardExpected.seekTimes) forward.seek(time);
   assertBufferMatches(forward, seekForwardExpected);
 
-  const fresh = new mod.BrightFx(BigInt(seekForwardExpected.seed));
-  applyConfig(fresh, seekConfigJson);
-  fresh.seek(seekForwardExpected.seekTimes.at(-1));
-  // Same binary, same steps: bit-identical, no tolerance. `deepStrictEqual`
-  // compares with `Object.is`, so -0 and +0 differ as they do bitwise; it
-  // also treats NaN as equal to NaN, so finiteness is asserted separately.
-  const freshFloats = Array.from(readBuffer(fresh, mod));
-  const forwardFloats = Array.from(readBuffer(forward, mod));
-  assert.ok(freshFloats.every(Number.isFinite), "fresh-seek buffer is not finite");
-  assert.ok(forwardFloats.every(Number.isFinite), "forward-seek buffer is not finite");
-  assert.deepStrictEqual(freshFloats, forwardFloats);
-  fresh.free();
+  assertMatchesFreshSeek(forward, seekConfigJson, seekForwardExpected.seed, seekForwardExpected.seekTimes.at(-1));
   forward.free();
 });
 
 test("a pre-rolled track is already running at t=0 and steps on bit-identically", () => {
   assert.ok(prerollExpected.particleCount > 0, "pre-roll fixture is vacuous");
   assert.deepEqual(prerollExpected.seekTimes, [0], "the pre-roll fixture records seek(0)");
+  assert.ok(prerollExpected.forwardTime > 0, "the pre-roll fixture records a forward time");
   const sim = new mod.BrightFx(BigInt(prerollExpected.seed));
   applyConfig(sim, prerollConfigJson);
   for (const time of prerollExpected.seekTimes) sim.seek(time);
   assertBufferMatches(sim, prerollExpected);
 
   // Leaving the pre-roll is a forward seek: bit-identical to a fresh one.
-  sim.seek(0.5);
-  assert.ok(sim.particleCount() > 0, "pool is empty after leaving the pre-roll");
-  const fresh = new mod.BrightFx(BigInt(prerollExpected.seed));
-  applyConfig(fresh, prerollConfigJson);
-  fresh.seek(0.5);
-  const forwardFloats = Array.from(readBuffer(sim, mod));
-  const freshFloats = Array.from(readBuffer(fresh, mod));
-  assert.ok(forwardFloats.every(Number.isFinite), "forward buffer is not finite");
-  assert.ok(freshFloats.every(Number.isFinite), "fresh buffer is not finite");
-  assert.deepStrictEqual(freshFloats, forwardFloats);
+  sim.seek(prerollExpected.forwardTime);
+  assertMatchesFreshSeek(sim, prerollConfigJson, prerollExpected.seed, prerollExpected.forwardTime);
   sim.free();
-  fresh.free();
 });
 
 // Drives a simulation to a state with live particles, for the detachment

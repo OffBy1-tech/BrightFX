@@ -5,14 +5,16 @@
 //! and a burst at negative times, and records the buffer at `seek(0)`:
 //! the pool the pre-roll built. Every harness reproduces it, then seeks
 //! the same handle on to 0.5 s and requires that to be bit-identical to a
-//! fresh seek, which is the forward path leaving the pre-roll. Run with
+//! fresh seek, which is the forward path leaving the pre-roll. The
+//! fixture records that forward time (`forwardTime`) so the harnesses read
+//! it rather than repeating it. Run with
 //! `BRIGHTFX_REGENERATE=1` to rewrite `ffi-preroll.expected.json` after an
 //! intentional simulation change.
 
 mod common;
 
 use common::bits;
-use common::seek::{check_fixture_for, load_sim_for, run_protocol_for};
+use common::seek::{check_fixture_with, load_sim_for, run_protocol_for};
 
 const CONFIG: &str = "ffi-preroll.config.json";
 const EXPECTED: &str = "ffi-preroll.expected.json";
@@ -21,11 +23,12 @@ const SEED: u64 = 42;
 /// t=0. The forward step out of the pre-roll is checked in-process below
 /// and in each harness, against a fresh seek rather than a recording.
 const SEEK_TIMES: [f32; 1] = [0.0];
+/// Where the forward check seeks on to, recorded as `forwardTime`.
 const FORWARD_TIME: f32 = 0.5;
 
 #[test]
 fn the_fixture_matches_the_recorded_expectation() {
-    check_fixture_for(CONFIG, EXPECTED, SEED, &SEEK_TIMES);
+    check_fixture_with(CONFIG, EXPECTED, SEED, &SEEK_TIMES, &[("forwardTime", FORWARD_TIME.into())]);
 }
 
 #[test]

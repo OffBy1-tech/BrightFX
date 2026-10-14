@@ -39,18 +39,37 @@ pub fn run_protocol(seed: u64, seek_times: &[f32]) -> (u32, Vec<f32>) {
 /// Runs the protocol on `config_file` and checks it against `expected_file`
 /// in the fixtures directory, or rewrites that file when regenerating.
 pub fn check_fixture_for(config_file: &str, expected_file: &str, seed: u64, seek_times: &[f32]) {
+    check_fixture_with(config_file, expected_file, seed, seek_times, &[]);
+}
+
+/// `check_fixture_for`, also recording `extra` fields the harnesses read
+/// (a forward seek time, say) and requiring the file to carry them as-is.
+pub fn check_fixture_with(
+    config_file: &str,
+    expected_file: &str,
+    seed: u64,
+    seek_times: &[f32],
+    extra: &[(&str, serde_json::Value)],
+) {
     let (count, buffer) = run_protocol_for(config_file, seed, seek_times);
     let record = || {
-        serde_json::json!({
+        let mut record = serde_json::json!({
             "seed": seed,
             "seekTimes": seek_times,
             "particleFloats": AbiSimulation::PARTICLE_FLOATS,
             "tolerance": LIBM_DRIFT_TOLERANCE,
             "particleCount": count,
             "buffer": buffer,
-        })
+        });
+        for (key, value) in extra {
+            record[*key] = value.clone();
+        }
+        record
     };
     let Some(expected) = load_or_regenerate(&fixtures_dir().join(expected_file), record) else { return };
+    for (key, value) in extra {
+        assert_eq!(&expected[*key], value, "{key} drifted");
+    }
 
     assert_eq!(expected["seed"].as_u64().unwrap(), seed, "fixture seed drifted");
     assert_eq!(floats(&expected["seekTimes"]), seek_times, "seek times drifted");

@@ -108,6 +108,8 @@ internal sealed class Expectation
     [JsonPropertyName("tolerance")] public float Tolerance { get; set; }
     [JsonPropertyName("particleCount")] public uint ParticleCount { get; set; }
     [JsonPropertyName("buffer")] public float[] Buffer { get; set; } = [];
+    /// Only the pre-roll fixture records one: where its forward check seeks.
+    [JsonPropertyName("forwardTime")] public float? ForwardTime { get; set; }
 }
 
 internal sealed class SeekExpectation
@@ -118,6 +120,8 @@ internal sealed class SeekExpectation
     [JsonPropertyName("tolerance")] public float Tolerance { get; set; }
     [JsonPropertyName("particleCount")] public uint ParticleCount { get; set; }
     [JsonPropertyName("buffer")] public float[] Buffer { get; set; } = [];
+    /// Only the pre-roll fixture records one: where its forward check seeks.
+    [JsonPropertyName("forwardTime")] public float? ForwardTime { get; set; }
 }
 
 internal sealed class FrameExpectation
@@ -167,6 +171,24 @@ internal static class Program
     /// tolerance` is false whenever either operand is NaN. At tolerance 0 the
     /// property is "bit-identical", so the bit patterns are compared -- that
     /// is the only way -0.0 and +0.0 differ.
+    /// `sim` has been seeked forward to `time`; a fresh handle seeked
+    /// straight there must hold the same buffer -- at tolerance 0, because
+    /// "bit-identical" is the whole property. An empty pool would compare
+    /// vacuously.
+    private static void AssertMatchesFreshSeek(IntPtr sim, string configJson, ulong seed, uint stride, float time)
+    {
+        uint count = Native.bfx_particle_count(sim);
+        if (count == 0) Fail($"pool is empty at {time}: the comparison would be vacuous");
+        IntPtr basePtr = Native.bfx_buffer_ptr(sim);
+        if (basePtr == IntPtr.Zero) Fail("bfx_buffer_ptr returned NULL");
+        float[] floats = Native.View<float>(basePtr, (int)(count * stride)).ToArray();
+
+        using var fresh = new Simulation(seed);
+        ApplyConfig(fresh.Ptr, configJson, "fresh-seek config");
+        Native.bfx_seek(fresh.Ptr, time);
+        AssertBufferMatches(fresh.Ptr, count, stride, floats, 0f);
+    }
+
     private static void AssertBufferMatches(IntPtr sim, uint expectedCount, uint stride, float[] expected, float tolerance)
     {
         uint count = Native.bfx_particle_count(sim);
@@ -250,19 +272,7 @@ internal static class Program
         foreach (float time in forwardExpected.SeekTimes) Native.bfx_seek(forwardSim.Ptr, time);
         AssertBufferMatches(forwardSim.Ptr, forwardExpected.ParticleCount, forwardExpected.ParticleFloats, forwardExpected.Buffer, forwardExpected.Tolerance);
 
-        // The forward handle's own buffer becomes the expectation the fresh
-        // seek has to reproduce -- at tolerance 0, because "bit-identical"
-        // is the whole property.
-        uint forwardCount = Native.bfx_particle_count(forwardSim.Ptr);
-        IntPtr forwardBase = Native.bfx_buffer_ptr(forwardSim.Ptr);
-        if (forwardBase == IntPtr.Zero) Fail("bfx_buffer_ptr returned NULL");
-        float[] forwardFloats =
-            Native.View<float>(forwardBase, (int)(forwardCount * forwardExpected.ParticleFloats)).ToArray();
-
-        using var freshSim = new Simulation(forwardExpected.Seed);
-        ApplyConfig(freshSim.Ptr, seekConfigJson, "fresh-seek config");
-        Native.bfx_seek(freshSim.Ptr, forwardExpected.SeekTimes[^1]);
-        AssertBufferMatches(freshSim.Ptr, forwardCount, forwardExpected.ParticleFloats, forwardFloats, 0f);
+        AssertMatchesFreshSeek(forwardSim.Ptr, seekConfigJson, forwardExpected.Seed, forwardExpected.ParticleFloats, forwardExpected.SeekTimes[^1]);
         Console.WriteLine("  ok  forward seeks reproduce the Rust buffer and match a fresh seek exactly");
 
         string prerollConfigJson = File.ReadAllText(Path.Combine(fixtures, "ffi-preroll.config.json"));
@@ -270,6 +280,7 @@ internal static class Program
             File.ReadAllText(Path.Combine(fixtures, "ffi-preroll.expected.json")))!;
         if (prerollExpected.ParticleCount == 0 || prerollExpected.SeekTimes.Length != 1 || prerollExpected.SeekTimes[0] != 0f)
             Fail("pre-roll fixture is vacuous or does not record seek(0)");
+        float prerollForward = prerollExpected.ForwardTime ?? throw new HarnessFailure("pre-roll fixture has no forwardTime");
 
         using var prerollSim = new Simulation(prerollExpected.Seed);
         ApplyConfig(prerollSim.Ptr, prerollConfigJson, "pre-roll config");
@@ -277,18 +288,8 @@ internal static class Program
         AssertBufferMatches(prerollSim.Ptr, prerollExpected.ParticleCount, prerollExpected.ParticleFloats, prerollExpected.Buffer, prerollExpected.Tolerance);
 
         // Leaving the pre-roll is a forward seek: bit-identical to a fresh one.
-        Native.bfx_seek(prerollSim.Ptr, 0.5f);
-        uint prerollCount = Native.bfx_particle_count(prerollSim.Ptr);
-        if (prerollCount == 0) Fail("pool is empty after leaving the pre-roll");
-        IntPtr prerollBase = Native.bfx_buffer_ptr(prerollSim.Ptr);
-        if (prerollBase == IntPtr.Zero) Fail("bfx_buffer_ptr returned NULL");
-        float[] prerollFloats =
-            Native.View<float>(prerollBase, (int)(prerollCount * prerollExpected.ParticleFloats)).ToArray();
-
-        using var prerollFresh = new Simulation(prerollExpected.Seed);
-        ApplyConfig(prerollFresh.Ptr, prerollConfigJson, "pre-roll fresh config");
-        Native.bfx_seek(prerollFresh.Ptr, 0.5f);
-        AssertBufferMatches(prerollFresh.Ptr, prerollCount, prerollExpected.ParticleFloats, prerollFloats, 0f);
+        Native.bfx_seek(prerollSim.Ptr, prerollForward);
+        AssertMatchesFreshSeek(prerollSim.Ptr, prerollConfigJson, prerollExpected.Seed, prerollExpected.ParticleFloats, prerollForward);
         Console.WriteLine("  ok  a pre-rolled track is already running at t=0 and steps on bit-identically");
 
         string frameConfigJson = File.ReadAllText(Path.Combine(fixtures, "ffi-frame.config.json"));
