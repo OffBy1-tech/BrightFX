@@ -10,7 +10,7 @@ that boundary.
 Not on the npm registry yet. Install from a vendored tarball:
 
 ```bash
-npm install ./vendor/brightfx-js-0.1.0.tgz
+npm install ./vendor/brightfx-js-0.2.0.tgz
 ```
 
 ## API

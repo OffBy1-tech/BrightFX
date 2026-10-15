@@ -8,12 +8,12 @@ effect config, the core, and the tracks crate — just the glue between
 ## Install
 
 Not on the npm registry yet, and `brightfx-remotion` depends on
-`brightfx-js@^0.1.0`, which also isn't on the registry — npm can't resolve
+`brightfx-js@^0.2.0`, which also isn't on the registry — npm can't resolve
 that dependency from a lone `brightfx-remotion` tarball, so install both
 tarballs **in the same `npm install` command**:
 
 ```bash
-npm install ./vendor/brightfx-js-0.1.0.tgz ./vendor/brightfx-remotion-0.2.0.tgz
+npm install ./vendor/brightfx-js-0.2.0.tgz ./vendor/brightfx-remotion-0.3.0.tgz
 ```
 
 Then copy (never symlink) the wasm binary into your `public/` directory,
