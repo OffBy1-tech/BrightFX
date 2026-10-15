@@ -71,12 +71,19 @@ pub(crate) fn ok_envelope_with_warnings(clamped: &[&'static str], warnings: &[St
 /// as `set_config`; a config one entry point rejects must not sail through
 /// another. Does not clamp: the caller decides whether bounds apply.
 pub fn parse_config(json: &str) -> Result<ParticleFxConfig, String> {
-    let value: serde_json::Value =
-        serde_json::from_str(json).map_err(|error| format!("invalid JSON: {error}"))?;
+    parse_config_value(parse_json(json)?)
+}
 
+/// The JSON-syntax step of `parse_config`, with its `invalid JSON: ...`
+/// message, for a caller that inspects the document before typing it.
+pub fn parse_json(json: &str) -> Result<serde_json::Value, String> {
+    serde_json::from_str(json).map_err(|error| format!("invalid JSON: {error}"))
+}
+
+/// The rest of `parse_config`, from an already-parsed document.
+pub fn parse_config_value(mut value: serde_json::Value) -> Result<ParticleFxConfig, String> {
     // Version first. Deserializing first would report a renamed field in
     // a future config as a confusing serde error instead of this.
-    let mut value = value;
     let version = value
         .get("schemaVersion")
         .and_then(|v| v.as_u64())
@@ -262,8 +269,10 @@ impl AbiSimulation {
     /// every trigger authored at or before `time` has fired when `time`
     /// is rendered and the simulation may sit up to one step past it. A
     /// forward seek steps from the previous seek; anything else replays
-    /// from the start of the track (its pre-roll before t=0). The buffer is a pure function of `time` either way. A
-    /// no-op when the config has no `emitterTrack`.
+    /// from the start of the track, or from the end of its pre-roll once
+    /// a seek has saved that state (`set_config` and a new size drop it).
+    /// The buffer is a pure function of `time` either way. A no-op when
+    /// the config has no `emitterTrack`.
     pub fn seek(&mut self, time: f32) {
         self.guard_mut(|sim| sim.seek(time));
     }
