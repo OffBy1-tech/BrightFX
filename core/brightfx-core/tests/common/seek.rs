@@ -38,12 +38,8 @@ pub fn run_protocol(seed: u64, seek_times: &[f32]) -> (u32, Vec<f32>) {
 
 /// Runs the protocol on `config_file` and checks it against `expected_file`
 /// in the fixtures directory, or rewrites that file when regenerating.
-pub fn check_fixture_for(config_file: &str, expected_file: &str, seed: u64, seek_times: &[f32]) {
-    check_fixture_with(config_file, expected_file, seed, seek_times, &[]);
-}
-
-/// `check_fixture_for`, also recording `extra` fields the harnesses read
-/// (a forward seek time, say) and requiring the file to carry them as-is.
+/// `extra` fields the harnesses read (a forward seek time, say) are
+/// recorded too, and the file must carry them as-is.
 pub fn check_fixture_with(
     config_file: &str,
     expected_file: &str,
@@ -87,7 +83,7 @@ pub fn check_fixture_with(
     assert_within_libm_drift(&buffer, &floats(&expected["buffer"]));
 }
 
-/// `check_fixture_for` on the shared seek config.
+/// `check_fixture_with` on the shared seek config, with no extra fields.
 pub fn check_fixture(expected_file: &str, seed: u64, seek_times: &[f32]) {
-    check_fixture_for("ffi-seek.config.json", expected_file, seed, seek_times)
+    check_fixture_with("ffi-seek.config.json", expected_file, seed, seek_times, &[])
 }

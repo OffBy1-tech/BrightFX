@@ -1,6 +1,6 @@
 # Emitter Track Pre-roll Implementation Plan
 
-> **Status:** shipped in #36. Review changed one rule after this plan: every preset pre-rolls `PRESET_PREROLL` (5 s, the `lifetimeMax` ceiling), not its own `lifetimeMax / 60`. The spec has the reasoning.
+> **Status:** shipped in #36. Review changed several decisions after this plan, so where they differ, the spec and the code win: every preset pre-rolls `PRESET_PREROLL` (5 s) rather than its own `lifetimeMax / 60`; `preroll` snaps up to the 1/60 s grid, which replaces the pin of a trigger at `-preroll`; `seek` saves the state at the end of the pre-roll and never allocates; keyframes are sorted only with a pre-roll or a negative time, and NaN times are dropped; a single forward check replaces the second expected file. The spec's "Deviations" and "Changes made in review" sections list them.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

@@ -32,10 +32,11 @@ exactly once.
     and the simulation may sit up to one step (1/60 s) past `time`. A
     seek at or after the previous seek's step applies only the steps in
     between; any other call sequence (a backward seek, or any `advance`,
-    `trigger_burst`, `set_emitter`, `set_config`, or a `set_bounds` that changes
-    the size since) resets and
-    replays from the start of the track. Both paths run the same whole steps, so the buffer
-    is a pure function of `time`. No-op without a track.
+    `trigger_burst`, `set_emitter`, `set_config`, or a `set_bounds` that
+    changes the size since) resets and replays from the start of the track,
+    or from the saved end of its pre-roll (see Pre-roll). Both paths run
+    the same whole steps, so the buffer is a pure function of `time`.
+    No-op without a track.
     With `emitter_track.preroll` (schema version 5) the track's timeline
     starts that many seconds before t=0, and a replay starts there, so
     `seek(0)` returns the pool after that much playback. Keyframes and
@@ -194,9 +195,10 @@ by that many seconds. The grid stays anchored at t=0 and the pre-roll adds
 the same whole steps as the same track with every time moved later by the
 pre-roll: bit-identical with a parked emitter
 (`a_prerolled_track_is_the_same_track_started_earlier`); a moving emitter
-samples its path at times that differ only by f32 rounding and, for an
-off-grid pre-roll, by the gap to the next grid point
+samples its path at times that differ only by f32 rounding
 (`a_prerolled_track_follows_its_path_through_the_preroll`, held to 1e-3).
+`preroll` is snapped up to the grid point at or after it, so the timeline
+always starts on the grid: an off-grid 0.505 s runs as 31/60 s.
 The state at the end of the pre-roll depends only on the config, the seed,
 and the bounds, so `seek` keeps it, and a replay that starts over (a
 backward scrub, a seek after a live call) resumes from it rather than

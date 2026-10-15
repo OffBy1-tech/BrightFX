@@ -8,7 +8,8 @@
 
 mod common;
 
-use common::seek::load_sim_for;
+use brightfx_core::abi::AbiSimulation;
+use common::fixtures_dir;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -46,19 +47,37 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
+/// The pre-roll fixture with `cullMargin` 0, so bounds turn culling on.
+fn culled(bounds: Option<(f32, f32)>) -> AbiSimulation {
+    let path = fixtures_dir().join("ffi-preroll.config.json");
+    let mut config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    config["cullMargin"] = 0.0.into();
+    let mut sim = AbiSimulation::new(42);
+    let envelope: serde_json::Value = serde_json::from_str(&sim.set_config(&config.to_string())).unwrap();
+    assert_eq!(envelope["ok"], true, "{envelope}");
+    if let Some((w, h)) = bounds {
+        sim.set_bounds(w, h);
+    }
+    sim
+}
+
 #[test]
 fn seeking_through_and_back_into_a_preroll_does_not_allocate() {
-    let mut sim = load_sim_for("ffi-preroll.config.json", 42);
-    sim.set_bounds(200.0, 200.0);
+    // The emitter runs from x=-60 to 120, so a 100 px frame culls part of
+    // the pool: the culling path runs under the counter too.
+    let mut sim = culled(Some((100.0, 100.0)));
+    let mut open = culled(None);
+    open.seek(0.25);
 
     COUNTING.with(|c| c.set(true));
     // The first seek runs the pre-roll and saves its end; the backward
     // ones restore it; the forward ones step on from the last seek.
-    for time in [1.0f32, 0.25, 0.0, 0.5, 0.75, 0.1] {
+    for time in [1.0f32, 0.25, 0.0, 0.5, 0.75, 0.1, 0.25] {
         sim.seek(time);
     }
     COUNTING.with(|c| c.set(false));
 
     assert!(sim.particle_count() > 0, "vacuous: nothing to copy");
+    assert!(sim.particle_count() < open.particle_count(), "vacuous: nothing was culled");
     assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0, "seek allocated");
 }

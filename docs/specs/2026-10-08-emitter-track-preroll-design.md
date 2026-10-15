@@ -165,7 +165,30 @@ The track's timeline runs from `-preroll` to `duration`.
 - The bit-identity property is qualified: bit for bit with a parked
   emitter, 1e-3 with a moving one.
 - The preset census band is widened by a tenth at each end.
-- A trigger at exactly `-preroll` is pinned to step 0.
+- A trigger at exactly `-preroll` was pinned to step 0. Superseded in
+  review: `preroll` is now snapped up to the 1/60 s grid (as `steps / 60`,
+  which keeps 0.5 and 5 exact and snaps to itself again), so the
+  timeline always starts on the grid, a trigger at `-preroll` reaches
+  step 0 through the ordinary arithmetic, and the pin, the off-grid reset
+  placement and their test are gone. An off-grid value is reported in
+  `clamped`.
+
+## Changes made in review
+
+- `seek` keeps the state at the end of the pre-roll, in memory
+  `set_config` reserves, and a replay that starts over resumes from it;
+  `seek` never allocates. `set_config` and a change of bounds drop it.
+- Keyframes are sorted (stable, NaN times dropped) when the track has a
+  pre-roll or a negative keyframe time. Any other track is one a v4 file
+  could hold and keeps its keyframes as authored.
+- NaN keyframe and trigger times are dropped. A trigger at -inf fires at
+  the reset; one at +inf never fires.
+- An infinite `preroll` clamps to 60 s, as an infinite `duration`
+  clamps to its cap.
+- `fitTrack` writes a number past the f32 range back as the f32 limit of
+  its sign, which the core reads the same way, except in a keyframe,
+  where it is refused by name. A keyframe the fit's scale pushes past f32
+  is refused as the fit's overflow.
 
 ## Out of scope
 

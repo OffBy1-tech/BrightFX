@@ -182,13 +182,19 @@ pub const MAX_PREROLL: f32 = 60.0;
 
 /// `preroll` as the core reads it: clamped into `0..=MAX_PREROLL`, so +inf
 /// (what serde reads from a JSON number past f32) is the longest pre-roll,
-/// as it is the longest `duration`. NaN is 0.
+/// as it is the longest `duration`, and NaN is 0. Then snapped up to the
+/// 1/60 s grid point at or after it (the rule `seek` applies to every
+/// time), so the pre-roll is a whole number of steps and the timeline's
+/// first step starts on the grid. The snapped value is `steps / 60`, the
+/// nearest f32 to the grid point, which snaps to the same step again, so
+/// sanitizing twice changes nothing. Seconds on the grid, such as 0.5 and
+/// 5, come through unchanged.
 pub fn sanitize_preroll(preroll: f32) -> f32 {
     if preroll.is_nan() {
-        0.0
-    } else {
-        preroll.clamp(0.0, MAX_PREROLL)
+        return 0.0;
     }
+    let steps = crate::simulation::grid_step(preroll.clamp(0.0, MAX_PREROLL));
+    (steps as f64 / crate::simulation::GRID_RATE) as f32
 }
 
 /// Upper bound on `cullMargin`, in logical px. A sanity limit, well past any
@@ -203,7 +209,8 @@ pub struct EmitterTrack {
     /// `seek(0)` returns the pool after that much playback instead of an
     /// empty one. Keyframes and triggers may be authored at negative times
     /// down to `-preroll`; a trigger earlier than that fires at the start.
-    /// Omitted (and written as nothing) when 0.
+    /// Snapped up to the 1/60 s grid (see `sanitize_preroll`). Omitted (and
+    /// written as nothing) when 0.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub preroll: f32,
     pub keyframes: Vec<EmitterKeyframe>,
@@ -862,6 +869,25 @@ mod tests {
             let changed = config.clamp_to_bounds();
             assert_eq!(config.emitter_track.unwrap().preroll, 0.0, "preroll {bad}");
             assert!(changed.contains(&"emitterTrack.preroll"), "preroll {bad} not reported");
+        }
+    }
+
+    #[test]
+    fn an_off_grid_preroll_snaps_up_to_the_grid_and_is_reported() {
+        // 0.505 s is 30.3 steps: the pre-roll becomes 31 whole steps.
+        let mut config = tracked(0.505);
+        let changed = config.clamp_to_bounds();
+        assert_eq!(config.emitter_track.unwrap().preroll, (31.0f64 / 60.0) as f32);
+        assert!(changed.contains(&"emitterTrack.preroll"));
+    }
+
+    #[test]
+    fn every_grid_preroll_is_a_fixed_point() {
+        // Sanitizing a sanitized pre-roll must not move it, or
+        // `clamp_to_bounds` would report a value the generators wrote.
+        for steps in 0..=3600u32 {
+            let preroll = (steps as f64 / 60.0) as f32;
+            assert_eq!(sanitize_preroll(preroll).to_bits(), preroll.to_bits(), "{steps} steps");
         }
     }
 
