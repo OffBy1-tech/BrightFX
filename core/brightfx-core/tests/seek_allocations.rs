@@ -56,7 +56,8 @@ fn culled(bounds: Option<(f32, f32)>) -> AbiSimulation {
     let envelope: serde_json::Value = serde_json::from_str(&sim.set_config(&config.to_string())).unwrap();
     assert_eq!(envelope["ok"], true, "{envelope}");
     if let Some((w, h)) = bounds {
-        sim.set_bounds(w, h);
+        let envelope: serde_json::Value = serde_json::from_str(&sim.set_bounds(w, h)).unwrap();
+        assert_eq!(envelope["ok"], true, "{envelope}");
     }
     sim
 }

@@ -62,6 +62,7 @@ seek(time)
 
 // drawing
 set_viewport(width, height, scale) -> envelope    // device pixels, and pixels per logical unit
+set_bounds(width, height) -> envelope             // logical px, for hosts that draw their own sprites
 render()
 read frame_len() bytes at frame_ptr()             // premultiplied RGBA8, stride width * 4
 ```

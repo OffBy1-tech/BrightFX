@@ -72,6 +72,21 @@ func applyConfig(_ sim: OpaquePointer, _ json: String, _ label: String) throws -
     return envelope
 }
 
+/// Calls bfx_set_bounds and returns its envelope, releasing the Rust-owned
+/// string.
+func setBounds(_ sim: OpaquePointer?, _ width: Float, _ height: Float) throws -> String {
+    guard let envelopePtr = bfx_set_bounds(sim, width, height) else { throw Failure("bfx_set_bounds returned NULL") }
+    let envelope = String(cString: envelopePtr)
+    bfx_string_free(envelopePtr)
+    return envelope
+}
+
+/// Sets the bounds and fails unless they were accepted.
+func applyBounds(_ sim: OpaquePointer, _ width: Float, _ height: Float) throws {
+    let envelope = try setBounds(sim, width, height)
+    guard envelope.contains("\"ok\":true") else { throw Failure("bounds \(width) x \(height) rejected: \(envelope)") }
+}
+
 /// Replays the emitter states the fixture recorded, one advance per frame,
 /// with the burst on the recorded frame.
 func drive(_ sim: OpaquePointer, frames: [EmitterFrame], burstFrame: Int, dt: Float) {
@@ -283,11 +298,19 @@ func run() throws {
     }
     print("  ok  set_config warns about a pool overflow and still accepts the config")
 
-    bfx_set_bounds(cullSim, 200, 200)
+    try applyBounds(cullSim, 200, 200)
     bfx_set_emitter(cullSim, 50, 50, 0, 0, true)
     for _ in 0..<5 { bfx_advance(cullSim, expected.dt) }
     guard bfx_particle_count(cullSim) > 0 else { throw Failure("cull check is vacuous: nothing spawned") }
-    bfx_set_bounds(cullSim, 1, 1)
+    // A size measured before layout (0, or NaN from an undefined) is
+    // rejected and keeps the frame, rather than turning culling off.
+    let liveBeforeZero = bfx_particle_count(cullSim)
+    let zeroEnvelope = try setBounds(cullSim, 0, 200)
+    guard zeroEnvelope.contains("\"ok\":false"), bfx_particle_count(cullSim) == liveBeforeZero else {
+        throw Failure("a zero size was not rejected cleanly: \(zeroEnvelope)")
+    }
+    print("  ok  bfx_set_bounds rejects a zero size with a message")
+    try applyBounds(cullSim, 1, 1)
     guard bfx_particle_count(cullSim) == 0 else {
         throw Failure("bfx_set_bounds did not cull the live particles: \(bfx_particle_count(cullSim)) left")
     }
@@ -299,7 +322,7 @@ func run() throws {
     guard let reCullSim = bfx_simulation_new(7) else { throw Failure("bfx_simulation_new returned NULL") }
     defer { bfx_simulation_free(reCullSim) }
     try applyConfig(reCullSim, cullConfigJson.replacingOccurrences(of: "\"cullMargin\": 0.0", with: "\"cullMargin\": 1000.0"), "wide-margin config")
-    bfx_set_bounds(reCullSim, 1, 1)
+    try applyBounds(reCullSim, 1, 1)
     bfx_set_emitter(reCullSim, 50, 50, 0, 0, true)
     for _ in 0..<5 { bfx_advance(reCullSim, expected.dt) }
     guard bfx_particle_count(reCullSim) > 0 else { throw Failure("set_config cull check is vacuous: nothing held") }
@@ -323,7 +346,7 @@ func run() throws {
     }
     bfx_advance(nil, 0.016)
     bfx_seek(nil, 1.0)
-    bfx_set_bounds(nil, 100, 100)
+    guard try setBounds(nil, 100, 100).contains("\"ok\":false") else { throw Failure("bfx_set_bounds accepted a null handle") }
     guard bfx_frame_len(nil) == 0, bfx_frame_ptr(nil) == nil else { throw Failure("null handle was not tolerated by frame accessors") }
     bfx_render(nil)
     bfx_simulation_free(nil)

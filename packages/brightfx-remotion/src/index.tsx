@@ -124,7 +124,8 @@ export function useBrightFX(
         } else if (boundsWidth > 0 && boundsHeight > 0) {
           // Only without a viewport: a viewport already set the bounds, and
           // `setBounds` after it would replace them with a different size.
-          created.setBounds(boundsWidth, boundsHeight);
+          const b = created.setBounds(boundsWidth, boundsHeight);
+          if (!b.ok) throw new Error(`BrightFX bounds rejected: ${b.error}`);
         }
         setLoaded({ sim: created, width: viewportWidth, height: viewportHeight, boundsWidth, boundsHeight });
         release();

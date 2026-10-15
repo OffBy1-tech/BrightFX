@@ -287,8 +287,11 @@ impl Simulation {
     }
 
     /// Sets the logical-pixel rectangle `[0, width] x [0, height]` that
-    /// `cullMargin` is measured from. A non-finite or non-positive
-    /// dimension clears it, and with no bounds nothing is culled.
+    /// `cullMargin` is measured from. Until it is set nothing is culled.
+    /// A non-finite or non-positive dimension is an error and changes
+    /// nothing, so a host measuring a container before layout is told
+    /// rather than having culling turned off. To stop culling, set
+    /// `cullMargin` to `None`.
     ///
     /// The ABI's `set_viewport` calls this itself. A host with no viewport
     /// (sprite mode) calls it with its container size.
@@ -303,14 +306,18 @@ impl Simulation {
     /// the particles outside it. Setting
     /// the bounds the simulation already has changes nothing and leaves it
     /// alone.
-    pub fn set_bounds(&mut self, width: f32, height: f32) {
+    pub fn set_bounds(&mut self, width: f32, height: f32) -> Result<(), String> {
         let valid = width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0;
-        let bounds = valid.then_some((width, height));
+        if !valid {
+            return Err(format!("bounds must be finite and positive, got {width} x {height}"));
+        }
+        let bounds = Some((width, height));
         if bounds != self.bounds {
             self.bounds = bounds;
             self.replay_inputs_changed();
             self.recull();
         }
+        Ok(())
     }
 
     /// Applies the cull rule to the live pool at its current positions, so
@@ -1516,14 +1523,14 @@ mod tests {
         config.initial_speed_max = 2.0;
         let mut sim = Simulation::new(config.clone(), 5);
         sim.seek(1.0);
-        sim.set_bounds(20.0, 20.0);
+        sim.set_bounds(20.0, 20.0).unwrap();
         assert!(!sim.preroll_saved);
         sim.seek(1.0);
-        sim.set_bounds(20.0, 20.0);
+        sim.set_bounds(20.0, 20.0).unwrap();
         assert!(sim.preroll_saved, "unchanged bounds keep it");
         sim.seek(0.25);
         let mut fresh = Simulation::new(config.clone(), 5);
-        fresh.set_bounds(20.0, 20.0);
+        fresh.set_bounds(20.0, 20.0).unwrap();
         fresh.seek(0.25);
         let mut unbounded = Simulation::new(config, 5);
         unbounded.seek(0.25);
@@ -2490,7 +2497,7 @@ mod tests {
     #[test]
     fn a_particle_past_the_margin_is_culled_and_one_inside_it_is_kept() {
         let mut sim = one_runner(Some(5.0));
-        sim.set_bounds(100.0, 100.0);
+        sim.set_bounds(100.0, 100.0).unwrap();
         // x is 60 +/- 2 after the spawn step; four more steps put it at
         // 100 +/- 2, inside the 105 edge.
         for _ in 0..4 {
@@ -2515,7 +2522,7 @@ mod tests {
         config.initial_speed_max = speed;
         config.cull_margin = margin;
         let mut sim = Simulation::new(config, 7);
-        sim.set_bounds(100.0, 100.0);
+        sim.set_bounds(100.0, 100.0).unwrap();
         sim.set_emitter(x, 50.0, 0.0, 0.0, true);
         sim.advance(TICK);
         sim.set_emitter(x, 50.0, 0.0, 0.0, false);
@@ -2601,7 +2608,7 @@ mod tests {
             config.initial_speed_max = 15.0;
             config.cull_margin = margin;
             let mut sim = Simulation::new(config, 7);
-            sim.set_bounds(4.0, 4.0);
+            sim.set_bounds(4.0, 4.0).unwrap();
             sim.set_emitter(-5.0, 2.0, 0.0, 0.0, true);
             sim.advance(TICK);
             sim.particle_count()
@@ -2617,7 +2624,7 @@ mod tests {
         config.initial_speed_min = 10.0;
         config.initial_speed_max = 10.0;
         let mut sim = Simulation::new(config.clone(), 7);
-        sim.set_bounds(100.0, 100.0);
+        sim.set_bounds(100.0, 100.0).unwrap();
         sim.set_emitter(50.0, 50.0, 0.0, 0.0, true);
         sim.advance(TICK);
         sim.set_emitter(50.0, 50.0, 0.0, 0.0, false);
@@ -2638,7 +2645,7 @@ mod tests {
         config.initial_speed_max = 10.0;
         config.cull_margin = Some(500.0);
         let mut sim = Simulation::new(config.clone(), 7);
-        sim.set_bounds(100.0, 100.0);
+        sim.set_bounds(100.0, 100.0).unwrap();
         sim.set_emitter(50.0, 50.0, 0.0, 0.0, true);
         sim.advance(TICK);
         sim.set_emitter(50.0, 50.0, 0.0, 0.0, false);
@@ -2662,7 +2669,7 @@ mod tests {
             config.initial_speed_max = 10.0;
             config.cull_margin = Some(0.0);
             let mut sim = Simulation::new(config, 7);
-            sim.set_bounds(100.0, 100.0);
+            sim.set_bounds(100.0, 100.0).unwrap();
             sim.set_emitter(50.0, 50.0, 0.0, 0.0, true);
             sim.advance(TICK);
             sim.set_emitter(50.0, 50.0, 0.0, 0.0, false);
@@ -2692,7 +2699,7 @@ mod tests {
         config.initial_speed_max = f32::INFINITY;
         config.cull_margin = margin;
         let mut sim = Simulation::new(config, 7);
-        sim.set_bounds(100.0, 100.0);
+        sim.set_bounds(100.0, 100.0).unwrap();
         sim.set_emitter(50.0, 50.0, 0.0, 0.0, true);
         sim.advance(TICK);
         sim
@@ -2709,7 +2716,7 @@ mod tests {
     #[test]
     fn nothing_is_culled_without_a_margin() {
         let mut sim = one_runner(None);
-        sim.set_bounds(100.0, 100.0);
+        sim.set_bounds(100.0, 100.0).unwrap();
         for _ in 0..20 {
             sim.advance(TICK);
         }
@@ -2717,15 +2724,29 @@ mod tests {
     }
 
     #[test]
-    fn invalid_bounds_clear_the_bounds() {
+    fn invalid_bounds_are_rejected_and_leave_the_bounds_alone() {
         let mut sim = Simulation::new(base_config(), 1);
-        sim.set_bounds(100.0, 50.0);
+        assert!(sim.set_bounds(f32::NAN, 50.0).is_err());
+        assert_eq!(sim.bounds(), None, "a rejected size set bounds");
+        sim.set_bounds(100.0, 50.0).unwrap();
         assert_eq!(sim.bounds(), Some((100.0, 50.0)));
         for (w, h) in [(0.0, 50.0), (100.0, -1.0), (f32::NAN, 50.0), (100.0, f32::INFINITY)] {
-            sim.set_bounds(100.0, 50.0);
-            sim.set_bounds(w, h);
-            assert_eq!(sim.bounds(), None, "({w}, {h})");
+            let error = sim.set_bounds(w, h).unwrap_err();
+            assert!(error.contains("finite and positive"), "({w}, {h}): {error}");
+            assert_eq!(sim.bounds(), Some((100.0, 50.0)), "({w}, {h}) changed the bounds");
         }
+    }
+
+    #[test]
+    fn rejected_bounds_keep_the_baked_position_and_the_pool() {
+        let mut sim = Simulation::new(track_config(), 5);
+        sim.set_bounds(100.0, 100.0).unwrap();
+        sim.seek(0.5);
+        let before = sim.particle_count();
+        assert!(sim.baked.is_some());
+        assert!(sim.set_bounds(0.0, 0.0).is_err());
+        assert!(sim.baked.is_some(), "a rejected size cleared the cursor");
+        assert_eq!(sim.particle_count(), before);
     }
 
     #[test]
@@ -2733,24 +2754,24 @@ mod tests {
         let mut sim = Simulation::new(track_config(), 5);
         sim.seek(0.5);
         assert!(sim.baked.is_some());
-        sim.set_bounds(100.0, 100.0);
+        sim.set_bounds(100.0, 100.0).unwrap();
         assert!(sim.baked.is_none(), "a new size left the cursor in place");
 
         sim.seek(0.5);
         assert!(sim.baked.is_some());
-        sim.set_bounds(100.0, 100.0);
+        sim.set_bounds(100.0, 100.0).unwrap();
         assert!(sim.baked.is_some(), "identical bounds cleared the cursor");
     }
 
     #[test]
     fn shrinking_the_bounds_culls_the_live_pool_without_a_step() {
         let mut sim = one_runner(Some(0.0));
-        sim.set_bounds(200.0, 100.0);
+        sim.set_bounds(200.0, 100.0).unwrap();
         advance_steps(&mut sim, 5);
         assert_eq!(sim.buffer().len(), 1, "test is vacuous: the runner left the frame");
         assert!(sim.buffer()[0].x > 100.0, "test is vacuous: the runner is inside the smaller frame");
 
-        sim.set_bounds(100.0, 100.0);
+        sim.set_bounds(100.0, 100.0).unwrap();
         assert_eq!(sim.particle_count(), 0, "a particle outside the new frame survived");
         assert!(sim.buffer().is_empty(), "the buffer still shows it");
     }
@@ -2761,7 +2782,7 @@ mod tests {
         // toward it and culled once it heads away; one inside the new
         // frame is kept and marked entered.
         let mut sim = one_runner(Some(0.0));
-        sim.set_bounds(10.0, 10.0); // the runner sits around (60, 50), right of it
+        sim.set_bounds(10.0, 10.0).unwrap(); // the runner sits around (60, 50), right of it
         assert_eq!(sim.particle_count(), 0, "outside and moving away (right) should go");
 
         let mut sim = one_runner(Some(0.0));
@@ -2769,26 +2790,26 @@ mod tests {
             p.vx = -10.0; // now heading back toward a frame to its left
             true
         });
-        sim.set_bounds(10.0, 100.0);
+        sim.set_bounds(10.0, 100.0).unwrap();
         assert_eq!(sim.particle_count(), 1, "outside but moving toward the frame must stay");
         assert!(sim.live.pool.iter().all(|p| !p.entered));
 
-        sim.set_bounds(200.0, 100.0);
+        sim.set_bounds(200.0, 100.0).unwrap();
         assert!(sim.live.pool.iter().all(|p| p.entered), "inside the new frame, not marked entered");
     }
 
     #[test]
     fn growing_the_bounds_or_having_no_margin_culls_nothing() {
         let mut sim = one_runner(Some(0.0));
-        sim.set_bounds(200.0, 100.0);
+        sim.set_bounds(200.0, 100.0).unwrap();
         advance_steps(&mut sim, 3);
-        sim.set_bounds(400.0, 400.0);
+        sim.set_bounds(400.0, 400.0).unwrap();
         assert_eq!(sim.particle_count(), 1);
 
         let mut sim = one_runner(None);
-        sim.set_bounds(200.0, 100.0);
+        sim.set_bounds(200.0, 100.0).unwrap();
         advance_steps(&mut sim, 5);
-        sim.set_bounds(100.0, 100.0);
+        sim.set_bounds(100.0, 100.0).unwrap();
         assert_eq!(sim.particle_count(), 1, "no cullMargin, nothing to cull");
     }
 
@@ -2833,7 +2854,7 @@ mod tests {
                 config.gravity_y += 3.0;
                 sim.set_config(config);
             }),
-            ("set_bounds", |sim| sim.set_bounds(100.0, 100.0)),
+            ("set_bounds", |sim| sim.set_bounds(100.0, 100.0).unwrap()),
             ("set_emitter", |sim| sim.set_emitter(5.0, 5.0, 1.0, 1.0, true)),
             ("trigger_burst", |sim| sim.trigger_burst()),
             ("advance", |sim| sim.advance(TICK)),
@@ -2925,7 +2946,7 @@ mod tests {
         let mut open = Simulation::new(culling_track_config(), 5);
         open.seek(0.55);
         let mut culled = Simulation::new(culling_track_config(), 5);
-        culled.set_bounds(200.0, 200.0);
+        culled.set_bounds(200.0, 200.0).unwrap();
         culled.seek(0.55);
 
         assert_eq!(open.particle_count(), 12, "test is vacuous without the burst");
@@ -2938,7 +2959,7 @@ mod tests {
     fn culling_is_deterministic_under_seek() {
         let make = || {
             let mut sim = Simulation::new(culling_track_config(), 5);
-            sim.set_bounds(200.0, 200.0);
+            sim.set_bounds(200.0, 200.0).unwrap();
             sim
         };
         let mut fresh = make();
@@ -2971,7 +2992,7 @@ mod tests {
                 keyframe.y = -40.0;
             }
             let mut sim = Simulation::new(config, 5);
-            sim.set_bounds(200.0, 200.0);
+            sim.set_bounds(200.0, 200.0).unwrap();
             sim
         };
         let mut fresh = make();

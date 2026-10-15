@@ -251,9 +251,16 @@ impl AbiSimulation {
 
     /// Sets the logical-unit rectangle `cullMargin` is measured from, for
     /// a host with no viewport (sprite mode). `set_viewport` sets it itself.
-    /// See `Simulation::set_bounds`.
-    pub fn set_bounds(&mut self, width: f32, height: f32) {
-        self.guard_mut(|sim| sim.set_bounds(width, height));
+    /// Returns an envelope like `set_viewport`: `{"ok":true,"clamped":[],
+    /// "warnings":[]}`, or `{"ok":false,"error":"..."}` for a non-finite or
+    /// non-positive size, which leaves the bounds as they were. See
+    /// `Simulation::set_bounds`.
+    pub fn set_bounds(&mut self, width: f32, height: f32) -> String {
+        match self.guard_mut(|sim| sim.set_bounds(width, height)) {
+            Some(Ok(())) => ok_envelope(&[]),
+            Some(Err(message)) => err_envelope(&message),
+            None => err_envelope(POISONED_MESSAGE),
+        }
     }
 
     pub fn trigger_burst(&mut self) {
@@ -336,7 +343,9 @@ impl AbiSimulation {
                 // The renderer clamps width, height and scale, so read back
                 // what it holds rather than the arguments.
                 if let Some(vp) = this.renderer.viewport() {
-                    this.sim.set_bounds(vp.width as f32 / vp.scale, vp.height as f32 / vp.scale);
+                    this.sim
+                        .set_bounds(vp.width as f32 / vp.scale, vp.height as f32 / vp.scale)
+                        .expect("a clamped viewport is a finite, positive size");
                 }
                 ok_envelope(&clamped)
             }
@@ -917,9 +926,24 @@ mod tests {
         #[test]
         fn set_bounds_sets_them_without_a_viewport() {
             let mut sim = AbiSimulation::new(1);
-            sim.set_bounds(320.0, 180.0);
+            let value = parse(&sim.set_bounds(320.0, 180.0));
+            assert_eq!(value["ok"], true);
+            assert_eq!(value["clamped"].as_array().unwrap().len(), 0);
             assert_eq!(sim.sim.bounds(), Some((320.0, 180.0)));
             assert_eq!(sim.frame_len(), 0, "set_bounds must not allocate a frame");
+        }
+
+        #[test]
+        fn invalid_bounds_are_rejected_with_a_message_and_keep_the_old_ones() {
+            let mut sim = AbiSimulation::new(1);
+            sim.set_bounds(320.0, 180.0);
+            // NaN is what wasm-bindgen hands over for an `undefined` size.
+            for (w, h) in [(0.0, 180.0), (320.0, f32::NAN)] {
+                let value = parse(&sim.set_bounds(w, h));
+                assert_eq!(value["ok"], false, "({w}, {h})");
+                assert!(value["error"].as_str().unwrap().contains("finite and positive"));
+                assert_eq!(sim.sim.bounds(), Some((320.0, 180.0)), "({w}, {h}) changed the bounds");
+            }
         }
 
         #[test]

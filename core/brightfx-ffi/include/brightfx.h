@@ -46,9 +46,9 @@ void bfx_simulation_free(struct BfxSimulation *sim);
 char *bfx_set_config(struct BfxSimulation *sim, const char *json);
 
 /**
- * Releases a string returned by `bfx_set_config` or `bfx_set_viewport`
- * (any function in this library that returns an owned `char*`). Safe to
- * call with NULL.
+ * Releases a string returned by `bfx_set_config`, `bfx_set_bounds`, or
+ * `bfx_set_viewport` (any function in this library that returns an owned
+ * `char*`). Safe to call with NULL.
  *
  * # Safety
  * `text` must be a pointer returned by this library, freed at most once.
@@ -64,14 +64,19 @@ void bfx_set_emitter(struct BfxSimulation *sim, float x, float y, float vx, floa
 /**
  * Sets the logical-unit rectangle `[0, width] x [0, height]` that the
  * config's `cullMargin` is measured from, for a host with no viewport
- * (sprite mode). `bfx_set_viewport` sets it itself. A non-finite or
- * non-positive dimension clears it, and with no bounds nothing is culled.
- * Culls the live particles against the new bounds immediately.
+ * (sprite mode). `bfx_set_viewport` sets it itself. Until it is set
+ * nothing is culled. Culls the live particles against the new bounds
+ * immediately.
+ *
+ * Returns an owned JSON envelope (free with `bfx_string_free`):
+ * `{"ok":true,"clamped":[],"warnings":[]}`, or `{"ok":false,"error":"..."}`
+ * for a non-finite or non-positive dimension, which leaves the bounds as
+ * they were.
  *
  * # Safety
  * `sim` must be a valid handle or NULL.
  */
-void bfx_set_bounds(struct BfxSimulation *sim, float width, float height);
+char *bfx_set_bounds(struct BfxSimulation *sim, float width, float height);
 
 /**
  * # Safety
