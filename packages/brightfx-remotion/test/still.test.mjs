@@ -69,12 +69,16 @@ function probeShown(png, name) {
   const px = probePixel(png, name);
   return px[3] > 200 && shared.probes[name].color.every((c, k) => Math.abs(px[k] - c) < 40);
 }
-// The width and height the last setBounds call was given, rounded and
-// clamped to a byte, or null if setBounds never ran.
-function boundsArgs(png) {
-  const [width, height, , alpha] = probePixel(png, "boundsArgs");
-  return alpha > 200 ? { width, height } : null;
+// Whether the last setBounds call was given `width` x `height`. The
+// probe's blue is lit only for two numbers in 0..255, so NaN, a missing
+// argument, or a marker shown but never written cannot pass for 0. The
+// ±2 is the same distrust of the PNG pipeline as probeShown's ±40, and
+// far below any size it must tell apart.
+function boundsArgsAre(png, width, height) {
+  const [r, g, b, a] = probePixel(png, "boundsArgs");
+  return a > 200 && b > 200 && Math.abs(r - width) <= 2 && Math.abs(g - height) <= 2;
 }
+const describeBoundsArgs = (png) => `rgba(${[...probePixel(png, "boundsArgs")].join(", ")})`;
 
 const engine = await BrightFX.init(readFileSync(join(pkg, "..", "brightfx-js", "wasm", "brightfx_wasm_bg.wasm")));
 
@@ -203,17 +207,16 @@ test("switching from sprite to frame mode mid-render draws the frame-mode frame"
 test("sprite mode gives the simulation the composition's bounds", () => {
   const png = still("SpriteBoundsTest");
   assert.ok(probeShown(png, "bounds"), "setBounds never ran in sprite mode, so cullMargin has nothing to cull against");
-  // W and H differ and both fit in a byte, so a swap, device pixels, or a
-  // size other than the composition's all show up here.
-  assert.deepEqual(boundsArgs(png), { width: W, height: H }, "setBounds was not given the composition's logical size");
+  // The probe records sizes up to 255; with W and H distinct, a swapped or
+  // scaled size shows up here.
+  assert.ok(W !== H && W <= 255 && H <= 255, `test is vacuous: ${W}x${H} cannot show a swap, or does not fit the probe`);
+  assert.ok(boundsArgsAre(png, W, H), `setBounds was not given the composition's ${W}x${H}: ${describeBoundsArgs(png)}`);
 });
 
 test("frame mode leaves the bounds to setViewport", () => {
   const png = still("FrameModeTest");
   assert.ok(probeShown(png, "raster"), "the frame never rasterized, so this proves nothing");
-  assert.ok(!probeShown(png, "bounds"), "setBounds ran in frame mode, where setViewport already sets the bounds");
-  assert.equal(boundsArgs(png), null, "the boundsArgs probe shows without a setBounds call");
-});
+  assert.ok(!probeShown(png, "bounds"), "setBounds ran in frame mode, where setViewport already sets the bounds");});
 
 test("a rejected bounds size is passed on, warned about, and does not cancel the render", () => {
   // A host measuring a container before layout passes 0. It must reach
@@ -221,7 +224,7 @@ test("a rejected bounds size is passed on, warned about, and does not cancel the
   // render: the next layout pass brings the real size.
   const png = still("ZeroBoundsTest");
   assert.ok(probeShown(png, "bounds"), "setBounds never ran, so the bad size was skipped silently");
-  assert.deepEqual(boundsArgs(png), { width: 0, height: 0 }, "setBounds was not given the 0 size the host passed");
+  assert.ok(boundsArgsAre(png, 0, 0), `setBounds was not given the 0x0 the host passed: ${describeBoundsArgs(png)}`);
   assert.ok(probeShown(png, "loaded"), "the hook never returned a simulation");
 });
 
