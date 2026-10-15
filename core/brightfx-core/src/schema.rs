@@ -5,10 +5,11 @@ use crate::particle::MAX_PARTICLES;
 
 /// The config schema version this build writes. Version 2 added the
 /// `random-palette` colour mode; version 3 the `capsule` shape and
-/// `spinDirection`; version 4 `cullMargin`. Nothing was renamed or removed,
+/// `spinDirection`; version 4 `cullMargin`; version 5 `emitterTrack.preroll`
+/// and negative keyframe and trigger times. Nothing was renamed or removed,
 /// so an older config is a valid current body once relabelled
-/// (`spinDirection` and `cullMargin` default).
-pub const SCHEMA_VERSION: u32 = 4;
+/// (`spinDirection`, `cullMargin`, and `preroll` default).
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// The oldest config schema version this build still reads. `AbiSimulation`
 /// accepts `MIN_SCHEMA_VERSION..=SCHEMA_VERSION`, migrates an older config
@@ -173,6 +174,29 @@ pub struct EmitterTrigger {
 /// ceiling only when `seek` silently stops short of them.
 pub const MAX_EMITTER_TRACK_DURATION: f32 = 600.0;
 
+/// Upper bound for `EmitterTrack.preroll`, in seconds. A pre-roll only needs
+/// to cover one particle lifetime (5 s at the `lifetimeMax` ceiling); 60 s
+/// is a sanity limit that caps the extra replay at 3600 steps. Public so
+/// generators (`brightfx-tracks`) clamp the same way the core does.
+pub const MAX_PREROLL: f32 = 60.0;
+
+/// `preroll` as the core reads it: clamped into `0..=MAX_PREROLL`, so +inf
+/// (what serde reads from a JSON number past f32) is the longest pre-roll,
+/// as it is the longest `duration`, and NaN is 0. Then snapped up to the
+/// 1/60 s grid point at or after it (the rule `seek` applies to every
+/// time), so the pre-roll is a whole number of steps and the timeline's
+/// first step starts on the grid. The snapped value is `steps / 60`, the
+/// nearest f32 to the grid point, which snaps to the same step again, so
+/// sanitizing twice changes nothing. Seconds on the grid, such as 0.5 and
+/// 5, come through unchanged.
+pub fn sanitize_preroll(preroll: f32) -> f32 {
+    if preroll.is_nan() {
+        return 0.0;
+    }
+    let steps = crate::simulation::grid_step(preroll.clamp(0.0, MAX_PREROLL));
+    (steps as f64 / crate::simulation::GRID_RATE) as f32
+}
+
 /// Upper bound on `cullMargin`, in logical px. A sanity limit, well past any
 /// real frame (`MAX_VIEWPORT_SIDE` is 8192 device px), not a numeric one.
 const MAX_CULL_MARGIN: f32 = 10_000.0;
@@ -181,8 +205,20 @@ const MAX_CULL_MARGIN: f32 = 10_000.0;
 #[serde(rename_all = "camelCase")]
 pub struct EmitterTrack {
     pub duration: f32,
+    /// Schema version 5. Seconds the timeline runs before t=0, so that
+    /// `seek(0)` returns the pool after that much playback instead of an
+    /// empty one. Keyframes and triggers may be authored at negative times
+    /// down to `-preroll`; a trigger earlier than that fires at the start.
+    /// Snapped up to the 1/60 s grid (see `sanitize_preroll`). Omitted (and
+    /// written as nothing) when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub preroll: f32,
     pub keyframes: Vec<EmitterKeyframe>,
     pub triggers: Vec<EmitterTrigger>,
+}
+
+fn is_zero(value: &f32) -> bool {
+    *value == 0.0
 }
 
 /// Replaces Mouseflare's cursor-specific spawn fields (`spawnRateOnMove`,
@@ -331,12 +367,21 @@ impl ParticleFxConfig {
         clamp(&mut self.peak_alpha, 0.0, 1.0, "peakAlpha");
         clamp(&mut self.end_alpha, 0.0, 1.0, "endAlpha");
 
-        if let Some(track) = self.emitter_track.as_mut() {
-            clamp(&mut track.duration, 0.0, MAX_EMITTER_TRACK_DURATION, "emitterTrack.duration");
-        }
-
         if let Some(margin) = self.cull_margin.as_mut() {
             clamp(margin, 0.0, MAX_CULL_MARGIN, "cullMargin");
+        }
+
+        // Last of the `clamp` calls: the closure holds `changed` until then.
+        if let Some(track) = self.emitter_track.as_mut() {
+            clamp(&mut track.duration, 0.0, MAX_EMITTER_TRACK_DURATION, "emitterTrack.duration");
+            // Not through `clamp`: a NaN survives `f32::clamp` and the
+            // equality test there, and a pre-roll must be a real number of
+            // steps.
+            let preroll = sanitize_preroll(track.preroll);
+            if preroll.to_bits() != track.preroll.to_bits() {
+                track.preroll = preroll;
+                changed.push("emitterTrack.preroll");
+            }
         }
 
         // Reported once for the whole list: field names are static strings,
@@ -771,6 +816,7 @@ mod tests {
         let mut config = example_config();
         config.emitter_track = Some(EmitterTrack {
             duration: 1_000_000.0,
+            preroll: 0.0,
             keyframes: vec![],
             triggers: vec![],
         });
@@ -787,6 +833,98 @@ mod tests {
         assert!(config.emitter_track.is_none());
         let changed = config.clamp_to_bounds();
         assert!(changed.is_empty());
+    }
+
+    fn tracked(preroll: f32) -> ParticleFxConfig {
+        let mut config = example_config();
+        config.emitter_track = Some(EmitterTrack {
+            duration: 10.0,
+            preroll,
+            keyframes: vec![],
+            triggers: vec![],
+        });
+        config
+    }
+
+    #[test]
+    fn an_oversized_preroll_is_clamped_and_reported() {
+        let mut config = tracked(1_000.0);
+        let changed = config.clamp_to_bounds();
+        assert_eq!(config.emitter_track.unwrap().preroll, MAX_PREROLL);
+        assert!(changed.contains(&"emitterTrack.preroll"));
+    }
+
+    #[test]
+    fn an_infinite_preroll_is_the_longest_and_is_reported() {
+        let mut config = tracked(f32::INFINITY);
+        let changed = config.clamp_to_bounds();
+        assert_eq!(config.emitter_track.unwrap().preroll, MAX_PREROLL);
+        assert!(changed.contains(&"emitterTrack.preroll"));
+    }
+
+    #[test]
+    fn a_negative_or_nan_preroll_becomes_zero_and_is_reported() {
+        for bad in [-1.0, f32::NAN, f32::NEG_INFINITY] {
+            let mut config = tracked(bad);
+            let changed = config.clamp_to_bounds();
+            assert_eq!(config.emitter_track.unwrap().preroll, 0.0, "preroll {bad}");
+            assert!(changed.contains(&"emitterTrack.preroll"), "preroll {bad} not reported");
+        }
+    }
+
+    #[test]
+    fn an_off_grid_preroll_snaps_up_to_the_grid_and_is_reported() {
+        // 0.505 s is 30.3 steps: the pre-roll becomes 31 whole steps.
+        let mut config = tracked(0.505);
+        let changed = config.clamp_to_bounds();
+        assert_eq!(config.emitter_track.unwrap().preroll, (31.0f64 / 60.0) as f32);
+        assert!(changed.contains(&"emitterTrack.preroll"));
+    }
+
+    #[test]
+    fn every_grid_preroll_is_a_fixed_point() {
+        // Sanitizing a sanitized pre-roll must not move it, or
+        // `clamp_to_bounds` would report a value the generators wrote.
+        for steps in 0..=3600u32 {
+            let preroll = (steps as f64 / 60.0) as f32;
+            assert_eq!(sanitize_preroll(preroll).to_bits(), preroll.to_bits(), "{steps} steps");
+        }
+    }
+
+    #[test]
+    fn an_in_range_preroll_is_left_alone_and_not_reported() {
+        let mut config = tracked(4.5);
+        let changed = config.clamp_to_bounds();
+        assert_eq!(config.emitter_track.unwrap().preroll, 4.5);
+        assert!(changed.is_empty());
+    }
+
+    #[test]
+    fn a_zero_preroll_is_omitted_from_json_and_read_back_as_zero() {
+        let json = serde_json::to_value(tracked(0.0)).unwrap();
+        assert!(json["emitterTrack"].get("preroll").is_none(), "{json}");
+        let back: ParticleFxConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(back.emitter_track.unwrap().preroll, 0.0);
+
+        let json = serde_json::to_value(tracked(2.0)).unwrap();
+        assert_eq!(json["emitterTrack"]["preroll"], 2.0);
+    }
+
+    #[test]
+    fn a_track_written_before_version_5_parses_with_no_preroll() {
+        let json = r#"{"duration": 1.0, "keyframes": [], "triggers": []}"#;
+        let track: EmitterTrack = serde_json::from_str(json).unwrap();
+        assert_eq!(track.preroll, 0.0);
+    }
+
+    #[test]
+    fn keyframes_and_triggers_may_carry_negative_times() {
+        let json = r#"{"duration": 1.0, "preroll": 1.0,
+            "keyframes": [{"time": -1.0, "x": 0.0, "y": 0.0, "vx": null, "vy": null}],
+            "triggers": [{"time": -1.0, "kind": "startContinuous"}]}"#;
+        let track: EmitterTrack = serde_json::from_str(json).unwrap();
+        assert_eq!(track.keyframes[0].time, -1.0);
+        assert_eq!(track.triggers[0].time, -1.0);
     }
 
     #[test]

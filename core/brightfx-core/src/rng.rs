@@ -1,6 +1,7 @@
 /// A small deterministic PRNG (SplitMix64) used instead of a platform RNG so
 /// that a given seed always produces the same particle sequence — required
 /// for reproducible timeline scrubbing and golden-output tests.
+#[derive(Clone)]
 pub struct Rng {
     state: u64,
 }

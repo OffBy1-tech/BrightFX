@@ -1,5 +1,5 @@
 use brightfx_core::schema::{EmitterKeyframe, EmitterTrack, EmitterTrigger, TriggerKind};
-use brightfx_core::{MAX_EMITTER_TRACK_DURATION, PLAYBACK_STEP};
+use brightfx_core::{sanitize_preroll, MAX_EMITTER_TRACK_DURATION, PLAYBACK_STEP};
 
 /// Shortest sweep period the core can actually play back.
 ///
@@ -35,49 +35,90 @@ pub(crate) fn leg_count(duration: f32, leg: f32) -> usize {
 
 /// A triangle-wave emitter path: the emitter travels from `a` to `b` and
 /// back once per `period` seconds, for `duration` seconds, with a single
-/// `StartContinuous` at time 0. The core spawns within ±2 px of the
-/// emitter, so a preset that must cover an edge or the whole frame moves
-/// the emitter across it. Keyframe velocities are pinned to zero so the
-/// sweep does not leak into the particles through `velocityInheritance`
-/// or the trail pattern's direction.
+/// `StartContinuous` at the start of the timeline. The core spawns within
+/// ±2 px of the emitter, so the path is the area the effect covers.
+/// Keyframe velocities are pinned to zero so the sweep does not leak into
+/// the particles through `velocityInheritance` or the trail pattern's
+/// direction; the host decides whether a moving emitter should throw.
 ///
-/// `period` is floored at [`MIN_SWEEP_PERIOD`] and `duration` is sanitized
-/// into `0..=MAX_EMITTER_TRACK_DURATION` (a non-finite duration becomes 0),
-/// so no input can ask for a keyframe list the core would never play.
-pub fn sweep_track(a: (f32, f32), b: (f32, f32), period: f32, duration: f32) -> EmitterTrack {
+/// `preroll` seconds of the same path are laid down before t=0 and the
+/// track carries it, so `seek(0)` returns a pool that has already run that
+/// long. The parity alternation is anchored at t=0: the keyframes at
+/// t >= 0 are the same with or without a pre-roll. `preroll` is clamped as
+/// the core clamps it (`0..=MAX_PREROLL`, NaN is 0).
+///
+/// `period` is floored at [`MIN_SWEEP_PERIOD`] and capped at `f32::MAX`,
+/// and `duration` is sanitized into `0..=MAX_EMITTER_TRACK_DURATION` (a
+/// non-finite duration becomes 0), so the result always loads unclamped.
+pub fn sweep_track(a: (f32, f32), b: (f32, f32), period: f32, duration: f32, preroll: f32) -> EmitterTrack {
+    // `max` rather than `clamp`, which would keep a NaN period. The
+    // infinite one is `legged_track`'s to cap.
     let half = period.max(MIN_SWEEP_PERIOD) / 2.0;
     let duration = if duration.is_finite() {
         duration.clamp(0.0, MAX_EMITTER_TRACK_DURATION)
     } else {
         0.0
     };
+    legged_track(half, duration, preroll, |_, i| if i.rem_euclid(2) == 0 { a } else { b })
+}
 
-    let count = leg_count(duration, half) + 1;
+/// A track with a keyframe every `leg` seconds from just before `-preroll`
+/// to `duration`, and one `StartContinuous` at `-preroll`: the shape both
+/// `sweep_track` and the presets' scatter path lay down. `at(j, i)` places
+/// keyframe `j`, counted from the track's first keyframe, which sits at leg
+/// `i` from t=0 (negative inside the pre-roll). `preroll` is sanitized as
+/// the core sanitizes it, and `leg` is capped at `f32::MAX`; its floor and
+/// `duration` are the caller's to bound.
+pub(crate) fn legged_track(
+    leg: f32,
+    duration: f32,
+    preroll: f32,
+    mut at: impl FnMut(usize, i64) -> (f32, f32),
+) -> EmitterTrack {
+    let preroll = sanitize_preroll(preroll);
+    // An infinite leg (a distance over a zero speed) would put the pre-roll
+    // keyframe at `-1 * inf`, a time JSON cannot carry, and the t=0 one at
+    // `0 * inf`, NaN. At `f32::MAX` the emitter just sits at the first
+    // point, as a very slow path would.
+    let leg = leg.min(f32::MAX);
 
-    let mut keyframes = Vec::with_capacity(count);
-    for i in 0..count {
-        // `.min(duration)` because a whole leg can land a fraction past the
-        // end (600 s at a 0.3 s leg ends at 600.00006): a keyframe beyond
-        // the track's own duration is one the core would never reach.
-        let time = (i as f32 * half).min(duration);
-        let (x, y) = if i.is_multiple_of(2) { a } else { b };
-        keyframes.push(EmitterKeyframe { time, x, y, vx: Some(0.0), vy: Some(0.0) });
-    }
+    // Whole legs before t=0: enough to cover the pre-roll, plus one, so
+    // the path reaches past `-preroll` instead of parking the emitter at
+    // the first keyframe for the opening fraction of a leg.
+    let before = if preroll > 0.0 { leg_count(preroll, leg) + 1 } else { 0 };
+    let count = before + leg_count(duration, leg) + 1;
+
+    let keyframes = (0..count)
+        .map(|j| {
+            let i = j as i64 - before as i64;
+            // `.min(duration)` because a whole leg can land a fraction past
+            // the end (600 s at a 0.3 s leg ends at 600.00006): a keyframe
+            // beyond the track's own duration is one the core would never
+            // reach.
+            let time = (i as f32 * leg).min(duration);
+            let (x, y) = at(j, i);
+            EmitterKeyframe { time, x, y, vx: Some(0.0), vy: Some(0.0) }
+        })
+        .collect();
     EmitterTrack {
         duration,
+        preroll,
         keyframes,
-        triggers: vec![EmitterTrigger { time: 0.0, kind: TriggerKind::StartContinuous }],
+        // `0.0 - preroll`, not `-preroll`: negating a zero gives -0.0, which
+        // serializes as `-0.0` and would change the bytes of any track
+        // generated with a zero pre-roll (the tests, and any future caller).
+        triggers: vec![EmitterTrigger { time: 0.0 - preroll, kind: TriggerKind::StartContinuous }],
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brightfx_core::{ParticleFxConfig, Simulation};
+    use brightfx_core::{ParticleFxConfig, Simulation, MAX_PREROLL};
 
     #[test]
     fn alternates_between_the_two_ends_every_half_period() {
-        let track = sweep_track((0.0, -20.0), (1920.0, -20.0), 1.0, 2.0);
+        let track = sweep_track((0.0, -20.0), (1920.0, -20.0), 1.0, 2.0, 0.0);
         let times: Vec<f32> = track.keyframes.iter().map(|k| k.time).collect();
         assert_eq!(times, vec![0.0, 0.5, 1.0, 1.5, 2.0]);
         let xs: Vec<f32> = track.keyframes.iter().map(|k| k.x).collect();
@@ -87,13 +128,13 @@ mod tests {
 
     #[test]
     fn velocities_are_pinned_to_zero() {
-        let track = sweep_track((0.0, 0.0), (10.0, 10.0), 1.0, 1.0);
+        let track = sweep_track((0.0, 0.0), (10.0, 10.0), 1.0, 1.0, 0.0);
         assert!(track.keyframes.iter().all(|k| k.vx == Some(0.0) && k.vy == Some(0.0)));
     }
 
     #[test]
-    fn starts_continuous_emission_at_zero_and_nothing_else() {
-        let track = sweep_track((0.0, 0.0), (10.0, 10.0), 1.0, 600.0);
+    fn starts_continuous_emission_at_the_track_start_and_nothing_else() {
+        let track = sweep_track((0.0, 0.0), (10.0, 10.0), 1.0, 600.0, 0.0);
         assert_eq!(track.duration, 600.0);
         assert_eq!(
             track.triggers,
@@ -102,10 +143,86 @@ mod tests {
     }
 
     #[test]
+    fn a_preroll_extends_the_sweep_backwards_and_starts_emission_there() {
+        let track = sweep_track((0.0, 0.0), (10.0, 0.0), 1.0, 2.0, 1.0);
+        assert_eq!(track.preroll, 1.0);
+        let times: Vec<f32> = track.keyframes.iter().map(|k| k.time).collect();
+        // Enough whole legs to cover the pre-roll, plus one: the path
+        // reaches past -preroll rather than parking the emitter there.
+        assert_eq!(times, vec![-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0]);
+        // The parity alternation is anchored at t=0, so the keyframes at
+        // t >= 0 are what they were without a pre-roll.
+        let xs: Vec<f32> = track.keyframes.iter().map(|k| k.x).collect();
+        assert_eq!(xs, vec![10.0, 0.0, 10.0, 0.0, 10.0, 0.0, 10.0, 0.0]);
+        assert_eq!(
+            track.triggers,
+            vec![EmitterTrigger { time: -1.0, kind: TriggerKind::StartContinuous }]
+        );
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn an_infinite_period_with_a_preroll_parks_the_emitter_at_a() {
+        // `-1 * inf` used to put the pre-roll keyframe at -inf: JSON writes
+        // it as null, and in-process the path sampled as NaN and the
+        // emitter sat at (0, 0) instead of `a`.
+        let track = sweep_track((100.0, 50.0), (200.0, 50.0), f32::INFINITY, 2.0, 1.0);
+        assert!(track.keyframes.iter().all(|k| k.time.is_finite()), "{:?}", track.keyframes);
+        let mut config = ParticleFxConfig::default();
+        config.emitter_track = Some(track);
+        config.emitter.spawn_rate_while_active = 2.0;
+        config.initial_speed_min = 0.0;
+        config.initial_speed_max = 0.0;
+        config.gravity_x = 0.0;
+        config.gravity_y = 0.0;
+        config.turbulence = 0.0;
+        config.lifetime_min = 300.0;
+        config.lifetime_max = 300.0;
+        let json = serde_json::to_string(&config).unwrap();
+        let mut sim = Simulation::new(serde_json::from_str(&json).unwrap(), 7);
+        sim.seek(1.0);
+        assert!(sim.particle_count() > 0, "vacuous");
+        for p in sim.buffer() {
+            assert!((p.x - 100.0).abs() < 2.5 && (p.y - 50.0).abs() < 2.5, "particle at ({}, {})", p.x, p.y);
+        }
+    }
+
+    #[test]
+    fn a_zero_preroll_is_the_old_track() {
+        let track = sweep_track((0.0, 0.0), (10.0, 0.0), 1.0, 2.0, 0.0);
+        assert_eq!(track.preroll, 0.0);
+        assert_eq!(track.keyframes[0].time, 0.0);
+        assert_eq!(track.triggers[0].time, 0.0);
+        assert!(track.triggers[0].time.is_sign_positive(), "a zero pre-roll must write 0.0, not -0.0");
+    }
+
+    #[test]
+    fn a_bad_preroll_is_clamped_like_the_core_clamps_it() {
+        assert_eq!(sweep_track((0.0, 0.0), (10.0, 0.0), 1.0, 2.0, -3.0).preroll, 0.0);
+        assert_eq!(sweep_track((0.0, 0.0), (10.0, 0.0), 1.0, 2.0, f32::NAN).preroll, 0.0);
+        for long in [1e9, f32::INFINITY] {
+            let capped = sweep_track((0.0, 0.0), (10.0, 0.0), 1.0, 2.0, long);
+            assert_eq!(capped.preroll, MAX_PREROLL, "preroll {long}");
+            assert!(capped.keyframes[0].time <= -MAX_PREROLL, "preroll {long}");
+        }
+    }
+
+    #[test]
+    fn an_infinite_leg_lays_down_finite_times() {
+        // The cap is in `legged_track`, so it covers every caller: the
+        // presets' scatter path reaches it with no cap of its own.
+        let track = legged_track(f32::INFINITY, 2.0, 1.0, |j, _| (j as f32, 0.0));
+        let times: Vec<f32> = track.keyframes.iter().map(|k| k.time).collect();
+        assert!(times.iter().all(|t| t.is_finite()), "{times:?}");
+        assert!(times.windows(2).all(|w| w[0] <= w[1]), "{times:?}");
+        assert_eq!(times[0], -f32::MAX);
+    }
+
+    #[test]
     fn the_final_keyframe_survives_a_half_period_that_does_not_divide_exactly() {
         // 0.9 / 0.3 is 2.9999998 in f32; without the tolerance the last
         // keyframe disappears and the sweep stops one end short.
-        let track = sweep_track((0.0, 0.0), (10.0, 0.0), 0.6, 0.9);
+        let track = sweep_track((0.0, 0.0), (10.0, 0.0), 0.6, 0.9, 0.0);
         assert_eq!(track.keyframes.len(), 4);
         let last = track.keyframes.last().unwrap().time;
         assert!((last - 0.9).abs() <= 1e-6, "last keyframe at {last}, wanted 0.9");
@@ -116,7 +233,7 @@ mod tests {
         // 600 / 0.3f32 is 1999.99992, and the old absolute 1e-4 tolerance
         // was too small to see that as 2000: the sweep dropped its last
         // leg and stopped at 599.7 s.
-        let track = sweep_track((0.0, 0.0), (10.0, 0.0), 0.6, MAX_EMITTER_TRACK_DURATION);
+        let track = sweep_track((0.0, 0.0), (10.0, 0.0), 0.6, MAX_EMITTER_TRACK_DURATION, 0.0);
         assert_eq!(track.keyframes.len(), 2001);
         assert_eq!(track.keyframes.last().unwrap().time, MAX_EMITTER_TRACK_DURATION);
     }
@@ -124,7 +241,7 @@ mod tests {
     #[test]
     fn a_non_finite_duration_produces_one_keyframe_and_a_zero_duration() {
         for bad in [f32::NAN, f32::INFINITY] {
-            let track = sweep_track((0.0, 0.0), (10.0, 0.0), 1.0, bad);
+            let track = sweep_track((0.0, 0.0), (10.0, 0.0), 1.0, bad, 0.0);
             assert_eq!(track.keyframes.len(), 1, "duration {bad}");
             assert_eq!(track.keyframes[0].time, 0.0);
             assert_eq!(track.duration, 0.0);
@@ -133,7 +250,7 @@ mod tests {
 
     #[test]
     fn a_huge_duration_is_clamped_to_the_cores_ceiling() {
-        let track = sweep_track((0.0, 0.0), (10.0, 0.0), 1.0, 1e9);
+        let track = sweep_track((0.0, 0.0), (10.0, 0.0), 1.0, 1e9, 0.0);
         assert_eq!(track.duration, MAX_EMITTER_TRACK_DURATION);
         // 600 s at a 0.5 s half-period: 1200 intervals, 1201 keyframes.
         assert_eq!(track.keyframes.len(), 1201);
@@ -148,7 +265,7 @@ mod tests {
         // the whole sweep collapses to a point. Assert positions, not
         // keyframe counts -- the count was right while the motion was not.
         let mut config = ParticleFxConfig::default();
-        config.emitter_track = Some(sweep_track((0.0, 0.0), (1000.0, 0.0), 0.0, 1.0));
+        config.emitter_track = Some(sweep_track((0.0, 0.0), (1000.0, 0.0), 0.0, 1.0, 0.0));
         config.emitter.spawn_rate_while_active = 20.0;
         // Particles spawn within +-2 px of the emitter; freeze them there.
         config.initial_speed_min = 0.0;

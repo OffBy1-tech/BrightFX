@@ -35,7 +35,7 @@ advance(dt)
 read particle_count() * particle_floats() floats at buffer_ptr()
 
 // scrubbing (requires an emitterTrack in the config)
-seek(time)                           // baked mode; forward seeks step from the last seek
+seek(time)                           // baked mode; forward seeks step from the last seek; runs emitterTrack.preroll before t=0
 
 // drawing
 set_viewport(width, height, scale) -> envelope    // device pixels, and pixels per logical unit
@@ -48,7 +48,7 @@ Notes that matter:
 - `set_config` succeeds atomically and keeps live particles; the new config
   applies from the next frame (a new `cullMargin` culls live particles at
   once). It also clears the baked position, so the
-  next `seek` replays from t=0. Re-seed with `seek(0)`.
+  next `seek` replays from the start of the track (its `preroll` before t=0). Re-seed with `seek(0)`.
 - **A rejected config changes nothing.** The previous config stays loaded.
 - **The buffer pointer is stable** for the life of a simulation, but its
   *contents* are only valid until the next `advance`/`seek`/`trigger_burst`, or a `set_config`/`set_bounds`/
@@ -98,8 +98,9 @@ guards simulation drift; the fixtures guard boundary drift.
   state on every frame (`emitterFrames`) so the harnesses replay numbers
   rather than each re-typing a formula.
 - `fixtures/ffi-seek.*`: the same config with an `emitterTrack`, driven
-  through `seek` alone. This is the only place `seek` crosses the boundary,
-  and the only cross-target coverage of baked timeline playback. It seeks
+  through `seek` alone, and the first of the three fixtures that carry
+  baked timeline playback across the boundary (with `ffi-seek-forward`
+  and `ffi-preroll` below). It seeks
   twice, backwards the second time, so the recorded state cannot depend on
   call history. Regenerated in the forward-seek change: the old replay
   loop accumulated its step time, so its running time undershot each grid
@@ -111,6 +112,12 @@ guards simulation drift; the fixtures guard boundary drift.
   buffer and then requires a fresh `seek` to the last time to be
   bit-identical — the property that lets a forward seek step instead of
   replay.
+- `fixtures/ffi-preroll.*`: a track whose timeline starts 1 s before t=0
+  (`emitterTrack.preroll`, schema version 5) with a StartContinuous and a
+  burst at negative times, recorded at `seek(0)`: the pool the pre-roll
+  built. Each harness reproduces it, then seeks the same handle on to
+  0.5 s and requires that to be bit-identical to a fresh seek, which is
+  the forward path leaving the pre-roll.
 - `fixtures/tracks-cues.*`: the lyric-cue generator's input and recorded
   jobs. Rust records; the Node harness runs the same input through the
   wasm build and requires the identical bytes, which is what keeps one
@@ -147,7 +154,7 @@ After an intentional simulation change, regenerate the particle fixtures
 (and the cue fixture too if the change touched track serialization):
 
 ```bash
-BRIGHTFX_REGENERATE=1 cargo test -p brightfx-core --test ffi_fixture --test seek_fixture --test seek_forward_fixture
+BRIGHTFX_REGENERATE=1 cargo test -p brightfx-core --test ffi_fixture --test seek_fixture --test seek_forward_fixture --test preroll_fixture
 BRIGHTFX_REGENERATE=1 cargo test -p brightfx-tracks --test cues_fixture
 ```
 

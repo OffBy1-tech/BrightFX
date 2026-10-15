@@ -18,8 +18,9 @@ use std::path::Path;
 #[allow(dead_code)]
 pub const LIBM_DRIFT_TOLERANCE: f32 = 2e-3;
 
-/// The two seek fixtures share a config, a protocol, and a file format;
-/// only the seek times and the file they record to differ.
+/// The seek fixtures share a protocol and a file format. `ffi-seek` and
+/// `ffi-seek-forward` also share a config and differ only in seek times
+/// and the file they record to; `ffi-preroll` brings its own config.
 #[allow(dead_code)]
 pub mod seek;
 

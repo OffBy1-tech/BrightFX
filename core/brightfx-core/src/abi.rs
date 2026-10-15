@@ -71,12 +71,19 @@ pub(crate) fn ok_envelope_with_warnings(clamped: &[&'static str], warnings: &[St
 /// as `set_config`; a config one entry point rejects must not sail through
 /// another. Does not clamp: the caller decides whether bounds apply.
 pub fn parse_config(json: &str) -> Result<ParticleFxConfig, String> {
-    let value: serde_json::Value =
-        serde_json::from_str(json).map_err(|error| format!("invalid JSON: {error}"))?;
+    parse_config_value(parse_json(json)?)
+}
 
+/// The JSON-syntax step of `parse_config`, with its `invalid JSON: ...`
+/// message, for a caller that inspects the document before typing it.
+pub fn parse_json(json: &str) -> Result<serde_json::Value, String> {
+    serde_json::from_str(json).map_err(|error| format!("invalid JSON: {error}"))
+}
+
+/// The rest of `parse_config`, from an already-parsed document.
+pub fn parse_config_value(mut value: serde_json::Value) -> Result<ParticleFxConfig, String> {
     // Version first. Deserializing first would report a renamed field in
     // a future config as a confusing serde error instead of this.
-    let mut value = value;
     let version = value
         .get("schemaVersion")
         .and_then(|v| v.as_u64())
@@ -187,9 +194,9 @@ impl AbiSimulation {
     /// makes live parameter editing usable; re-seeding is `seek(0)`'s job.
     ///
     /// It does clear the baked position, because the new config may carry
-    /// a different `emitterTrack`: the next `seek` replays from t=0
-    /// rather than stepping forward from a state the new track did not
-    /// produce.
+    /// a different `emitterTrack`: the next `seek` replays from the start
+    /// of the track (its pre-roll before t=0) rather than stepping forward
+    /// from a state the new track did not produce.
     pub fn set_config(&mut self, json: &str) -> String {
         self.guard_mut(|sim| Self::set_config_inner(sim, json))
             .unwrap_or_else(|| err_envelope(POISONED_MESSAGE))
@@ -262,8 +269,10 @@ impl AbiSimulation {
     /// every trigger authored at or before `time` has fired when `time`
     /// is rendered and the simulation may sit up to one step past it. A
     /// forward seek steps from the previous seek; anything else replays
-    /// from t=0. The buffer is a pure function of `time` either way. A
-    /// no-op when the config has no `emitterTrack`.
+    /// from the start of the track, or from the end of its pre-roll once
+    /// a seek has saved that state (`set_config` and a new size drop it).
+    /// The buffer is a pure function of `time` either way. A no-op when
+    /// the config has no `emitterTrack`.
     pub fn seek(&mut self, time: f32) {
         self.guard_mut(|sim| sim.seek(time));
     }
@@ -396,8 +405,8 @@ const POISONED_MESSAGE: &str = "simulation is poisoned by a panic; create a new 
 /// Brings a supported older config forward to `SCHEMA_VERSION`, one
 /// version at a time. This is where each future step slots in.
 fn migrate(value: &mut serde_json::Value, from: u64) {
-    // 1 -> 2 -> 3 -> 4 only added vocabulary (and defaulted fields): the body
-    // is already valid.
+    // 1 -> 2 -> 3 -> 4 -> 5 only added vocabulary (and defaulted fields):
+    // the body is already valid.
     if from < SCHEMA_VERSION as u64 {
         value["schemaVersion"] = serde_json::json!(SCHEMA_VERSION);
     }
@@ -422,8 +431,8 @@ mod tests {
         let err = parse_config("{ not json").unwrap_err();
         assert!(err.starts_with("invalid JSON"), "got: {err}");
 
-        let err = parse_config(r#"{"schemaVersion": 5, "somethingEntirelyNew": true}"#).unwrap_err();
-        assert!(err.contains("unsupported schemaVersion 5"), "got: {err}");
+        let err = parse_config(r#"{"schemaVersion": 6, "somethingEntirelyNew": true}"#).unwrap_err();
+        assert!(err.contains("unsupported schemaVersion 6"), "got: {err}");
 
         let err = parse_config(r#"{"glowRadius": 1}"#).unwrap_err();
         assert_eq!(err, "missing or non-numeric schemaVersion");
@@ -569,7 +578,7 @@ mod tests {
     fn the_version_is_checked_before_the_body_is_deserialized() {
         // A future config whose body today's struct cannot parse must still
         // produce the version error, not a confusing serde error.
-        let json = r#"{"schemaVersion": 5, "somethingEntirelyNew": true}"#;
+        let json = r#"{"schemaVersion": 6, "somethingEntirelyNew": true}"#;
         let mut sim = AbiSimulation::new(42);
 
         let result = parse(&sim.set_config(json));
@@ -580,10 +589,10 @@ mod tests {
 
     #[test]
     fn older_versions_still_load_and_read_back_as_the_current_version() {
-        // v2, v3 and v4 only added vocabulary and defaulted fields, so an
+        // v2 to v5 only added vocabulary and defaulted fields, so an
         // older body is a valid current body once relabelled --
         // spinDirection and cullMargin default when absent.
-        for version in [1u64, 2, 3] {
+        for version in [1u64, 2, 3, 4] {
             let mut value = serde_json::to_value(ParticleFxConfig::default()).unwrap();
             value["schemaVersion"] = serde_json::json!(version);
             value.as_object_mut().unwrap().remove("spinDirection");
@@ -600,20 +609,20 @@ mod tests {
     }
 
     #[test]
-    fn the_current_version_is_4_and_loads() {
-        assert_eq!(SCHEMA_VERSION, 4);
+    fn the_current_version_is_5_and_loads() {
+        assert_eq!(SCHEMA_VERSION, 5);
         let json = serde_json::to_string(&ParticleFxConfig::default()).unwrap();
-        assert_eq!(parse_config(&json).unwrap().schema_version, 4);
+        assert_eq!(parse_config(&json).unwrap().schema_version, 5);
     }
 
     #[test]
     fn versions_outside_the_supported_range_are_rejected_clearly() {
-        for version in [0u64, 5] {
+        for version in [0u64, 6] {
             let mut value = serde_json::to_value(ParticleFxConfig::default()).unwrap();
             value["schemaVersion"] = serde_json::json!(version);
             let message = parse_config(&value.to_string()).unwrap_err();
             assert!(message.contains(&format!("unsupported schemaVersion {version}")), "got: {message}");
-            assert!(message.contains("1-4"), "message must name the supported range: {message}");
+            assert!(message.contains("1-5"), "message must name the supported range: {message}");
         }
     }
 
@@ -833,6 +842,7 @@ mod tests {
         let config = ParticleFxConfig {
             emitter_track: Some(EmitterTrack {
                 duration: 2.0,
+                preroll: 0.0,
                 keyframes: vec![
                     EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(1.0), vy: Some(0.0) },
                     EmitterKeyframe { time: 2.0, x: 60.0, y: 0.0, vx: Some(1.0), vy: Some(0.0) },

@@ -30,6 +30,8 @@ struct SeekExpectation: Decodable {
     let tolerance: Float
     let particleCount: UInt32
     let buffer: [Float]
+    /// Only the pre-roll fixture records one: where its forward check seeks.
+    let forwardTime: Float?
 }
 
 struct FrameExpectation: Decodable {
@@ -107,6 +109,25 @@ func assertBufferMatches(
     }
 }
 
+/// `sim` has been seeked forward to `time`; a fresh handle seeked straight
+/// there must hold the same buffer -- at tolerance 0, because
+/// "bit-identical" is the whole property. An empty pool would compare
+/// vacuously.
+func assertMatchesFreshSeek(
+    _ sim: OpaquePointer, configJson: String, seed: UInt64, stride: UInt32, time: Float
+) throws {
+    let count = bfx_particle_count(sim)
+    guard count > 0 else { throw Failure("pool is empty at \(time): the comparison would be vacuous") }
+    guard let base = bfx_buffer_ptr(sim) else { throw Failure("bfx_buffer_ptr returned NULL") }
+    let floats = Array(UnsafeBufferPointer(start: base, count: Int(count * stride)))
+
+    guard let fresh = bfx_simulation_new(seed) else { throw Failure("bfx_simulation_new returned NULL") }
+    defer { bfx_simulation_free(fresh) }
+    try applyConfig(fresh, configJson, "fresh-seek config")
+    bfx_seek(fresh, time)
+    try assertBufferMatches(fresh, count: count, stride: stride, buffer: floats, tolerance: 0)
+}
+
 func run() throws {
     let fixtures = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
@@ -180,22 +201,34 @@ func run() throws {
         forwardSim, count: forwardExpected.particleCount, stride: forwardExpected.particleFloats,
         buffer: forwardExpected.buffer, tolerance: forwardExpected.tolerance)
 
-    // The forward handle's own buffer becomes the expectation the fresh
-    // seek has to reproduce -- at tolerance 0, because "bit-identical" is
-    // the whole property.
-    let forwardCount = bfx_particle_count(forwardSim)
-    guard let forwardBase = bfx_buffer_ptr(forwardSim) else { throw Failure("bfx_buffer_ptr returned NULL") }
-    let forwardFloats = Array(
-        UnsafeBufferPointer(start: forwardBase, count: Int(forwardCount * forwardExpected.particleFloats)))
-
-    guard let freshSim = bfx_simulation_new(forwardExpected.seed) else { throw Failure("bfx_simulation_new returned NULL") }
-    defer { bfx_simulation_free(freshSim) }
-    try applyConfig(freshSim, seekConfigJson, "fresh-seek config")
-    bfx_seek(freshSim, forwardExpected.seekTimes[forwardExpected.seekTimes.count - 1])
-    try assertBufferMatches(
-        freshSim, count: forwardCount, stride: forwardExpected.particleFloats,
-        buffer: forwardFloats, tolerance: 0)
+    try assertMatchesFreshSeek(
+        forwardSim, configJson: seekConfigJson, seed: forwardExpected.seed,
+        stride: forwardExpected.particleFloats, time: forwardExpected.seekTimes[forwardExpected.seekTimes.count - 1])
     print("  ok  forward seeks reproduce the Rust buffer and match a fresh seek exactly")
+
+    // --- pre-roll protocol -----------------------------------------------------
+    let prerollConfigJson = try text("ffi-preroll.config.json")
+    let prerollExpected: SeekExpectation = try decode("ffi-preroll.expected.json")
+    guard prerollExpected.particleCount > 0, prerollExpected.seekTimes.count == 1, prerollExpected.seekTimes[0] == 0,
+        let prerollForward = prerollExpected.forwardTime
+    else {
+        throw Failure("pre-roll fixture is vacuous, does not record seek(0), or has no forwardTime")
+    }
+
+    guard let prerollSim = bfx_simulation_new(prerollExpected.seed) else { throw Failure("bfx_simulation_new returned NULL") }
+    defer { bfx_simulation_free(prerollSim) }
+    try applyConfig(prerollSim, prerollConfigJson, "pre-roll config")
+    for time in prerollExpected.seekTimes { bfx_seek(prerollSim, time) }
+    try assertBufferMatches(
+        prerollSim, count: prerollExpected.particleCount, stride: prerollExpected.particleFloats,
+        buffer: prerollExpected.buffer, tolerance: prerollExpected.tolerance)
+
+    // Leaving the pre-roll is a forward seek: bit-identical to a fresh one.
+    bfx_seek(prerollSim, prerollForward)
+    try assertMatchesFreshSeek(
+        prerollSim, configJson: prerollConfigJson, seed: prerollExpected.seed,
+        stride: prerollExpected.particleFloats, time: prerollForward)
+    print("  ok  a pre-rolled track is already running at t=0 and steps on bit-identically")
 
     // --- frame protocol --------------------------------------------------------
     let frameConfigJson = try text("ffi-frame.config.json")

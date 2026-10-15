@@ -21,7 +21,7 @@ use brightfx_core::render::glow_blur_logical;
 use brightfx_core::{ParticleFxConfig, Simulation, MAX_EMITTER_TRACK_DURATION, PLAYBACK_STEP};
 use brightfx_tracks::fit_track;
 use brightfx_test_support::{fixtures_dir, regenerating};
-use brightfx_tracks::presets::{library, render_json, FRAME_H, FRAME_W};
+use brightfx_tracks::presets::{library, render_json, FRAME_H, FRAME_W, PRESET_PREROLL};
 use std::path::PathBuf;
 
 /// The renderer's `MIN_SCALE`. Anything smaller is clamped back up to it.
@@ -37,10 +37,10 @@ const CHANNEL_TOLERANCE: u8 = 4;
 /// 0.5% of the frame.
 const MAX_DIFFERING_PIXELS: usize = GOLDEN_W * GOLDEN_H / 200;
 
-/// Where the steady-state checks start: well past the 5 s lifetime
-/// ceiling, so every preset has filled and turned its first particles
-/// over. `GOLDEN_TIME` is too early for that -- no particle with a
-/// 290-300 step life has died by 3 s.
+/// Where the steady-state checks start. Every preset pre-rolls
+/// `PRESET_PREROLL`, so it is already steady at t=0; starting well into
+/// the track keeps the census independent of that claim, which
+/// `at_time_zero_every_preset_is_already_at_steady_state` tests against it.
 const STEADY_TIME: f32 = 9.0;
 /// How long the steady-state checks watch, in steps (3 s).
 const STEADY_STEPS: usize = 180;
@@ -130,13 +130,18 @@ fn every_preset_loads_unclamped_and_emits() {
             config["emitterTrack"]["duration"], MAX_EMITTER_TRACK_DURATION,
             "{name}: track must run the full cap"
         );
-        // One trigger, at 0, and nothing after it: a second trigger (a
-        // stop, a burst) would let the track decide when the preset shows,
-        // which is the composition's job.
+        // One trigger, at the start of the pre-roll, and nothing after it:
+        // a second trigger (a stop, a burst) would let the track decide
+        // when the preset shows, which is the composition's job.
+        let preroll = config["emitterTrack"]["preroll"]
+            .as_f64()
+            .unwrap_or_else(|| panic!("{name}: emitterTrack.preroll is missing from the shipped JSON"))
+            as f32;
+        assert_eq!(preroll, PRESET_PREROLL, "{name}: pre-roll is one lifetime at the ceiling");
         let triggers = config["emitterTrack"]["triggers"].as_array().unwrap();
         assert_eq!(triggers.len(), 1, "{name}: expected exactly one trigger, got {triggers:?}");
         assert_eq!(triggers[0]["kind"], "startContinuous", "{name}: must start continuous");
-        assert_eq!(triggers[0]["time"], 0.0, "{name}: must start at 0");
+        assert_eq!(triggers[0]["time"].as_f64().unwrap() as f32, -preroll, "{name}: must start at -preroll");
     }
 }
 
@@ -223,6 +228,7 @@ struct Census {
     visible_deaths: Vec<(f32, f32, f32)>,
     deaths: usize,
     pool_peak: usize,
+    pool_min: usize,
 }
 
 /// Steps a preset one `PLAYBACK_STEP` at a time and finds its deaths.
@@ -250,11 +256,12 @@ fn census(config: ParticleFxConfig, w: f32, h: f32, bounded: bool) -> Census {
     };
     let mut prev = snapshot(&sim);
     let mut velocity: Vec<Option<[f32; 2]>> = vec![None; prev.len()];
-    let mut census = Census { visible_deaths: Vec::new(), deaths: 0, pool_peak: prev.len() };
+    let mut census = Census { visible_deaths: Vec::new(), deaths: 0, pool_peak: prev.len(), pool_min: prev.len() };
     for step in 1..=STEADY_STEPS {
         sim.seek((start + step) as f32 * PLAYBACK_STEP);
         let next = snapshot(&sim);
         census.pool_peak = census.pool_peak.max(next.len());
+        census.pool_min = census.pool_min.min(next.len());
         let mut next_velocity = Vec::with_capacity(next.len());
         let mut j = 0;
         for (i, p) in prev.iter().enumerate() {
@@ -318,6 +325,45 @@ fn at_steady_state_every_preset_leaves_pool_headroom() {
                 let fitted = fit_track(config.clone(), (FRAME_W, FRAME_H), (w, h)).unwrap();
                 let peak = census(fitted, w, h, bounded).pool_peak;
                 assert!(peak <= limit, "{name} {w}x{h} bounded={bounded}: pool peaked at {peak}, over {limit} ({MAX_PARTICLES} less {POOL_HEADROOM} headroom)");
+            }
+        }
+    }
+}
+
+/// #19: a composition that shows a preset in its first seconds must not
+/// get an empty frame filling up. With a pre-roll of at least one lifetime
+/// the pool at t=0 is a sample of the steady state, so its size sits inside
+/// the range the census sees from `STEADY_TIME` on. That holds for the
+/// preset as shipped and for one a host spread with `lifetimeMax` raised
+/// to the ceiling, which a pre-roll of the preset's own lifetime missed.
+/// The band is widened by a tenth at each end: the count fluctuates with
+/// the emitter's path, and 180 steps is a short look at it. A miss by more than that means the pre-roll is
+/// wrong, not the band.
+#[test]
+fn at_time_zero_every_preset_is_already_at_steady_state() {
+    let edited = library().into_iter().map(|(name, mut config)| {
+        config.lifetime_max = 300.0;
+        (format!("{name} (lifetimeMax 300)"), config)
+    });
+    let shipped = library().into_iter().map(|(name, config)| (name.to_string(), config));
+    for (name, config) in shipped.chain(edited) {
+        for (w, h) in [(FRAME_W, FRAME_H), (FRAME_H, FRAME_W)] {
+            for bounded in [false, true] {
+                let fitted = fit_track(config.clone(), (FRAME_W, FRAME_H), (w, h)).unwrap();
+                let steady = census(fitted.clone(), w, h, bounded);
+                let mut sim = Simulation::new(fitted, 7);
+                if bounded {
+                    sim.set_bounds(w, h);
+                }
+                sim.seek(0.0);
+                let at_zero = sim.particle_count() as usize;
+                let low = steady.pool_min * 9 / 10;
+                let high = steady.pool_peak * 11 / 10;
+                assert!(
+                    (low..=high).contains(&at_zero),
+                    "{name} {w}x{h} bounded={bounded}: {at_zero} particles at t=0, steady state holds {}..={}",
+                    steady.pool_min, steady.pool_peak
+                );
             }
         }
     }

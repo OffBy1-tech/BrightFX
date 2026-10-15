@@ -46,6 +46,12 @@ export interface EmitterTrigger {
 
 export interface EmitterTrack {
   duration: number;
+  /** Schema version 5+. Seconds the timeline runs before t=0, so `seek(0)`
+   *  returns the pool after that much playback instead of an empty one.
+   *  Keyframes and triggers may be authored at negative times down to
+   *  `-preroll`. Omitted means 0. The pre-roll is simulated, never
+   *  rendered: `seek` still clamps its time at 0. */
+  preroll?: number;
   keyframes: EmitterKeyframe[];
   triggers: EmitterTrigger[];
 }
@@ -224,7 +230,8 @@ export class Simulation {
   /** The logical-pixel size `cullMargin` is measured from, for a host that
    *  draws its own sprites and never calls `setViewport` (which sets it
    *  itself, as `width / scale` by `height / scale`). Changing it makes the
-   *  next `seek` replay from zero. A non-finite or non-positive size
+   *  next `seek` replay from the start of the track (its `preroll` before
+   *  t=0). A non-finite or non-positive size
    *  (including `undefined`, which wasm-bindgen turns into NaN) clears the
    *  bounds and so turns culling off. When a host calls both `setViewport`
    *  and `setBounds`, the last call wins. */

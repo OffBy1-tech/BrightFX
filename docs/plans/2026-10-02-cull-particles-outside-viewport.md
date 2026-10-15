@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust workspace in `core/` (serde, schemars, wasm-bindgen), TypeScript wrappers in `packages/`, node:test, Remotion.
 
-Spec: `docs/superpowers/specs/2026-10-02-cull-particles-outside-viewport-design.md`
+Spec: `docs/specs/2026-10-02-cull-particles-outside-viewport-design.md`
 
 ## Global Constraints
 
