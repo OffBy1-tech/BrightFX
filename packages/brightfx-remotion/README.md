@@ -91,18 +91,28 @@ this: `useBrightFX(effect, seed, wasmSrc, viewport, bounds = null)`, where
 `bounds` is `{ width, height }` in logical px. It is ignored when a `viewport`
 is given, since a viewport sets the bounds itself.
 
-The cull tests a particle's center, but in sprite mode the glyph is yours, so
-the effect's `cullMargin` has to cover it: at least the glyph's farthest reach
-from its center (half its diagonal, if it rotates), or a glyph is removed
-while part of it is still on screen. A preset's margin assumes a glyph size;
-`flight-arc`'s 120 covers rotating square glyphs up to about 170 px. For
-larger glyphs, override it:
+`cullMargin` is measured from a particle's center to an axis-aligned
+rectangle, so it must cover what is drawn around the center, or a particle
+is removed while part of it is still on screen. In sprite mode that is your
+glyph: half its width and height, or half its diagonal if it rotates. (In
+frame mode the core draws the particle, and a large `size` or glow reaches
+past the center the same way.) A preset's margin assumes a glyph size it
+cannot see; `flight-arc`'s 120 covers rotating square glyphs up to about
+170 px. For larger glyphs, raise it, and never lower it:
 
 ```tsx
-<BrightFX effect={{ ...flightArc, cullMargin: 160 }} mode="sprite" render={drawGlyph} />
+// At module scope (or in useMemo): a new object each frame would make
+// the component re-serialize the whole effect every frame.
+const throws = { ...flightArc, cullMargin: Math.max(flightArc.cullMargin ?? 0, 160) };
+
+<BrightFX effect={throws} mode="sprite" render={drawGlyph} />
 ```
 
-`cullMargin` is clamped into 0..10,000 logical px.
+If you fit the effect to your composition with `fitTrack`, raise the margin
+on the fitted config: fitting may already have raised it past your value
+to cover the stretched emitter, and spreading a smaller one over it would
+undo that. `cullMargin` is clamped to 0 through 10,000 logical px; NaN or
+±Infinity serialize as `null` and turn culling off.
 
 ## Empty frames
 
