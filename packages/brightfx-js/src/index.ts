@@ -76,7 +76,15 @@ export type EffectConfig = {
    *  `setBounds`), after it has been inside that area once. A particle
    *  outside the area that is moving away from it is removed too, so an
    *  emitter placed off-screen works with any margin. Omitted or `null`
-   *  never culls. */
+   *  never culls. Clamped into 0..10,000 (the core's `MAX_CULL_MARGIN`),
+   *  with `cullMargin` listed in `setConfig`'s `clamped`.
+   *
+   *  The test is the particle's center, so a host drawing its own sprites
+   *  needs a margin of at least a glyph's farthest reach from its center
+   *  (half the diagonal, for a glyph that rotates), or a glyph is removed
+   *  while part of it is still on screen. A preset's margin assumes a glyph
+   *  size it cannot see; raise it for larger glyphs by overriding the
+   *  field, e.g. `{ ...preset, cullMargin: 160 }`. */
   cullMargin?: number | null;
 } & Record<string, unknown>;
 

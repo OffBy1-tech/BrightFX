@@ -91,6 +91,19 @@ this: `useBrightFX(effect, seed, wasmSrc, viewport, bounds = null)`, where
 `bounds` is `{ width, height }` in logical px. It is ignored when a `viewport`
 is given, since a viewport sets the bounds itself.
 
+The cull tests a particle's center, but in sprite mode the glyph is yours, so
+the effect's `cullMargin` has to cover it: at least the glyph's farthest reach
+from its center (half its diagonal, if it rotates), or a glyph is removed
+while part of it is still on screen. A preset's margin assumes a glyph size;
+`flight-arc`'s 120 covers rotating square glyphs up to about 170 px. For
+larger glyphs, override it:
+
+```tsx
+<BrightFX effect={{ ...flightArc, cullMargin: 160 }} mode="sprite" render={drawGlyph} />
+```
+
+`cullMargin` is clamped into 0..10,000 logical px.
+
 ## Empty frames
 
 A frame with no particles costs a seek and nothing else: frame mode skips

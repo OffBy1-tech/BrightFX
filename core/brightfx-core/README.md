@@ -159,7 +159,8 @@ the field existed.
 
 ## Culling
 
-`cullMargin` (schema version 4; omitted or `null` means off) removes a
+`cullMargin` (schema version 4; omitted or `null` means off; clamped into
+`0..=MAX_CULL_MARGIN`, 10,000) removes a
 particle once its center is more than that many logical px outside the
 simulation's bounds, so an edge-spawned effect need not keep a lifetime long
 enough to cross every aspect ratio. The bounds come from `set_viewport`

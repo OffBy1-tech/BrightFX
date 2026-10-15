@@ -517,6 +517,12 @@ pub fn bubbles() -> ParticleFxConfig {
 /// stretches the emitter's x (to ~200 at 3840×2160). It saves little (a pool
 /// of ~11 becomes ~8 at 1920×1080 and ~5 at 1080×1920); it is here so the
 /// throws are gone as soon as they have left.
+///
+/// The glyph is the host's, so 120 is an assumption the preset cannot
+/// check. The throws spin, so what counts is half a glyph's diagonal: 120
+/// covers square glyphs up to ~170 px. A host drawing larger ones raises
+/// `cullMargin` to at least half their diagonal (the README's "Culling
+/// bounds" in `brightfx-remotion` says how).
 pub fn flight_arc() -> ParticleFxConfig {
     let mut c = base(
         "flight-arc",
