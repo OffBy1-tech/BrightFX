@@ -22,6 +22,10 @@ const burstOnceEffect = withTriggers(shared.burstOnceTriggers);
 // re-renders only the component, so a sibling reading a counter would miss
 // it. Compositions without the markers are unaffected.
 const PROBE_METHODS = { raster: ["render", "frame"], seek: ["seek"], bounds: ["setBounds"] } as const;
+// setBounds also records what it was given, as the colour of the
+// boundsArgs marker: red is the width, green the height, each rounded and
+// clamped to a byte (NaN as 0). The last call wins.
+const byte = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? Math.max(0, Math.min(255, Math.round(n))) : 0);
 for (const [probe, methods] of Object.entries(PROBE_METHODS)) {
   for (const method of methods) {
     const proto = Simulation.prototype as unknown as Record<string, (...args: unknown[]) => unknown>;
@@ -29,6 +33,11 @@ for (const [probe, methods] of Object.entries(PROBE_METHODS)) {
     proto[method] = function (this: Simulation, ...args: unknown[]) {
       const marker = document.getElementById(`probe-${probe}`);
       if (marker) marker.style.display = "block";
+      const argMarker = method === "setBounds" ? document.getElementById("probe-boundsArgs") : null;
+      if (argMarker) {
+        argMarker.style.display = "block";
+        argMarker.style.background = `rgb(${byte(args[0])},${byte(args[1])},0)`;
+      }
       return original.apply(this, args);
     };
   }

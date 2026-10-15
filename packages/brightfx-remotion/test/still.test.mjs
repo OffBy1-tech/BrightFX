@@ -60,10 +60,20 @@ const painted = (png) => {
 // corner, revealed when the component calls the probed Simulation method.
 const PROBE_BOX_W = Math.max(...Object.values(shared.probes).map((p) => p.right)) + shared.probeSize;
 const inProbeBox = (x, y) => x >= W - PROBE_BOX_W && y >= H - shared.probeSize;
-function probeShown(png, name) {
-  const { right, color } = shared.probes[name];
+function probePixel(png, name) {
+  const { right } = shared.probes[name];
   const i = ((H - shared.probeSize / 2) * W + (W - right - shared.probeSize / 2)) * 4;
-  return png.data[i + 3] > 200 && color.every((c, k) => Math.abs(png.data[i + k] - c) < 40);
+  return png.data.subarray(i, i + 4);
+}
+function probeShown(png, name) {
+  const px = probePixel(png, name);
+  return px[3] > 200 && shared.probes[name].color.every((c, k) => Math.abs(px[k] - c) < 40);
+}
+// The width and height the last setBounds call was given, rounded and
+// clamped to a byte, or null if setBounds never ran.
+function boundsArgs(png) {
+  const [width, height, , alpha] = probePixel(png, "boundsArgs");
+  return alpha > 200 ? { width, height } : null;
 }
 
 const engine = await BrightFX.init(readFileSync(join(pkg, "..", "brightfx-js", "wasm", "brightfx_wasm_bg.wasm")));
@@ -193,12 +203,16 @@ test("switching from sprite to frame mode mid-render draws the frame-mode frame"
 test("sprite mode gives the simulation the composition's bounds", () => {
   const png = still("SpriteBoundsTest");
   assert.ok(probeShown(png, "bounds"), "setBounds never ran in sprite mode, so cullMargin has nothing to cull against");
+  // W and H differ and both fit in a byte, so a swap, device pixels, or a
+  // size other than the composition's all show up here.
+  assert.deepEqual(boundsArgs(png), { width: W, height: H }, "setBounds was not given the composition's logical size");
 });
 
 test("frame mode leaves the bounds to setViewport", () => {
   const png = still("FrameModeTest");
   assert.ok(probeShown(png, "raster"), "the frame never rasterized, so this proves nothing");
   assert.ok(!probeShown(png, "bounds"), "setBounds ran in frame mode, where setViewport already sets the bounds");
+  assert.equal(boundsArgs(png), null, "the boundsArgs probe shows without a setBounds call");
 });
 
 test("a rejected bounds size is passed on, warned about, and does not cancel the render", () => {
@@ -207,6 +221,7 @@ test("a rejected bounds size is passed on, warned about, and does not cancel the
   // render: the next layout pass brings the real size.
   const png = still("ZeroBoundsTest");
   assert.ok(probeShown(png, "bounds"), "setBounds never ran, so the bad size was skipped silently");
+  assert.deepEqual(boundsArgs(png), { width: 0, height: 0 }, "setBounds was not given the 0 size the host passed");
   assert.ok(probeShown(png, "loaded"), "the hook never returned a simulation");
 });
 
