@@ -1,5 +1,5 @@
 {
-  "comment": "Shared by src/Root.tsx and still.test.mjs. Trigger lists replace the triggers of core/fixtures/ffi-seek.config.json; probes are DOM markers pinned to the bottom-right corner (offsets in px from the right edge), revealed when the named Simulation method runs (loaded: when useBrightFX returns a simulation).",
+  "comment": "Shared by src/Root.tsx and still.test.mjs. Trigger lists replace the triggers of core/fixtures/ffi-seek.config.json; probes are DOM markers pinned to the bottom-right corner (offsets in px from the right edge), revealed when the named Simulation method runs (loaded: when useBrightFX returns a simulation; boundsArgs: when setBounds runs, its colour then replaced by the width and height it was given, as red and green, with blue lit when both are in 0..255; the placeholder colour here means shown but never written).",
   "lateStartTriggers": [
     { "time": 1.5, "kind": "startContinuous" },
     { "time": 1.8, "kind": "burst" }
@@ -10,6 +10,7 @@
     "raster": { "right": 0, "color": [0, 0, 255] },
     "seek": { "right": 8, "color": [0, 255, 0] },
     "bounds": { "right": 16, "color": [255, 0, 255] },
-    "loaded": { "right": 24, "color": [255, 255, 0] }
+    "loaded": { "right": 24, "color": [255, 255, 0] },
+    "boundsArgs": { "right": 32, "color": [0, 0, 128] }
   }
 }

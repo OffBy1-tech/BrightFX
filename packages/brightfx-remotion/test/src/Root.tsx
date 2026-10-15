@@ -22,9 +22,9 @@ const burstOnceEffect = withTriggers(shared.burstOnceTriggers);
 // re-renders only the component, so a sibling reading a counter would miss
 // it. Compositions without the markers are unaffected.
 const PROBE_METHODS = { raster: ["render", "frame"], seek: ["seek"], bounds: ["setBounds"] } as const;
+const proto = Simulation.prototype as unknown as Record<string, (...args: unknown[]) => unknown>;
 for (const [probe, methods] of Object.entries(PROBE_METHODS)) {
   for (const method of methods) {
-    const proto = Simulation.prototype as unknown as Record<string, (...args: unknown[]) => unknown>;
     const original = proto[method];
     proto[method] = function (this: Simulation, ...args: unknown[]) {
       const marker = document.getElementById(`probe-${probe}`);
@@ -33,6 +33,22 @@ for (const [probe, methods] of Object.entries(PROBE_METHODS)) {
     };
   }
 }
+
+// setBounds also records what it was given, as the colour of the
+// boundsArgs marker: red is the width and green the height, rounded and
+// clamped to a byte; blue is lit only if both were numbers in 0..255, so
+// NaN or a missing argument cannot pass for 0. The last call wins.
+const inByte = (n: unknown): n is number => typeof n === "number" && n >= 0 && n <= 255;
+const byte = (n: unknown) => (inByte(n) ? Math.round(n) : typeof n === "number" && n > 255 ? 255 : 0);
+const probedSetBounds = proto.setBounds;
+proto.setBounds = function (this: Simulation, ...args: unknown[]) {
+  const marker = document.getElementById("probe-boundsArgs");
+  if (marker) {
+    marker.style.display = "block";
+    marker.style.background = `rgb(${byte(args[0])},${byte(args[1])},${inByte(args[0]) && inByte(args[1]) ? 255 : 0})`;
+  }
+  return probedSetBounds.apply(this, args);
+};
 
 const Probes: React.FC = () => (
   <>
