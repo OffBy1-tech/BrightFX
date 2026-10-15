@@ -251,9 +251,16 @@ impl AbiSimulation {
 
     /// Sets the logical-unit rectangle `cullMargin` is measured from, for
     /// a host with no viewport (sprite mode). `set_viewport` sets it itself.
-    /// See `Simulation::set_bounds`.
-    pub fn set_bounds(&mut self, width: f32, height: f32) {
-        self.guard_mut(|sim| sim.set_bounds(width, height));
+    /// Returns an envelope like `set_viewport`: `{"ok":true,"clamped":[],
+    /// "warnings":[]}`, or `{"ok":false,"error":"..."}` for a non-finite or
+    /// non-positive size, which leaves the bounds as they were. See
+    /// `Simulation::set_bounds`.
+    pub fn set_bounds(&mut self, width: f32, height: f32) -> String {
+        match self.guard_mut(|sim| sim.set_bounds(width, height)) {
+            Some(Ok(())) => ok_envelope(&[]),
+            Some(Err(message)) => err_envelope(&message),
+            None => err_envelope(POISONED_MESSAGE),
+        }
     }
 
     pub fn trigger_burst(&mut self) {
@@ -300,8 +307,9 @@ impl AbiSimulation {
     /// `set_config`/`set_bounds`/`set_viewport` that culls live particles
     /// at once (a new `cullMargin`, or a changed size). The
     /// address itself is stable for the life of the simulation (the buffer is
-    /// preallocated), but hosts on WASM must still re-read it after
-    /// `set_config`, which can grow linear memory and detach existing views.
+    /// preallocated), but hosts on WASM must still re-read it after any call
+    /// that returns an envelope (`set_config`, `set_bounds`, `set_viewport`):
+    /// building the envelope can grow linear memory and detach existing views.
     pub fn buffer_ptr(&self) -> *const f32 {
         self.sim.buffer().as_ptr() as *const f32
     }
@@ -321,7 +329,8 @@ impl AbiSimulation {
     /// `scale` device pixels per logical unit. Returns an envelope like
     /// `set_config`: `{"ok":true,"clamped":[...],"warnings":[]}` with any of
     /// `viewport.width`, `viewport.height`, `viewport.scale`, or
-    /// `{"ok":false,"error":"..."}` for a zero dimension.
+    /// `{"ok":false,"error":"..."}` for a zero dimension or a non-finite
+    /// scale.
     ///
     /// Reallocates the frame, so on WASM a host must re-read `frame_ptr`
     /// afterwards, as with `set_config` and the particle buffer.
@@ -335,8 +344,15 @@ impl AbiSimulation {
             Ok(clamped) => {
                 // The renderer clamps width, height and scale, so read back
                 // what it holds rather than the arguments.
+                // The clamp keeps both finite and positive, so this cannot
+                // fail today; if a clamp change ever broke that, report it
+                // rather than panic across the boundary.
                 if let Some(vp) = this.renderer.viewport() {
-                    this.sim.set_bounds(vp.width as f32 / vp.scale, vp.height as f32 / vp.scale);
+                    if let Err(message) =
+                        this.sim.set_bounds(vp.width as f32 / vp.scale, vp.height as f32 / vp.scale)
+                    {
+                        return err_envelope(&message);
+                    }
                 }
                 ok_envelope(&clamped)
             }
@@ -766,10 +782,15 @@ mod tests {
         sim.trigger_burst();
         assert_eq!(sim.sim.particle_count(), pool_before, "poisoned sim still mutated");
 
-        // And config loads report the condition instead of silently succeeding.
+        // And every envelope call reports the condition instead of silently
+        // succeeding.
         let value = parse(&sim.set_config(&valid_config_json()));
         assert_eq!(value["ok"], false);
         assert!(value["error"].as_str().unwrap().contains("poisoned"));
+        let value = parse(&sim.set_bounds(100.0, 100.0));
+        assert_eq!(value["ok"], false);
+        assert!(value["error"].as_str().unwrap().contains("poisoned"));
+        assert_eq!(sim.sim.bounds(), None, "a poisoned simulation took bounds");
     }
 
     #[test]
@@ -917,9 +938,24 @@ mod tests {
         #[test]
         fn set_bounds_sets_them_without_a_viewport() {
             let mut sim = AbiSimulation::new(1);
-            sim.set_bounds(320.0, 180.0);
+            let value = parse(&sim.set_bounds(320.0, 180.0));
+            assert_eq!(value["ok"], true);
+            assert_eq!(value["clamped"].as_array().unwrap().len(), 0);
             assert_eq!(sim.sim.bounds(), Some((320.0, 180.0)));
             assert_eq!(sim.frame_len(), 0, "set_bounds must not allocate a frame");
+        }
+
+        #[test]
+        fn invalid_bounds_are_rejected_with_a_message_and_keep_the_old_ones() {
+            let mut sim = AbiSimulation::new(1);
+            sim.set_bounds(320.0, 180.0);
+            // NaN is what wasm-bindgen hands over for an `undefined` size.
+            for (w, h) in [(0.0, 180.0), (320.0, f32::NAN)] {
+                let value = parse(&sim.set_bounds(w, h));
+                assert_eq!(value["ok"], false, "({w}, {h})");
+                assert!(value["error"].as_str().unwrap().contains("finite and positive"));
+                assert_eq!(sim.sim.bounds(), Some((320.0, 180.0)), "({w}, {h}) changed the bounds");
+            }
         }
 
         #[test]

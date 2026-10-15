@@ -39,6 +39,7 @@ seek(time)                           // baked mode; forward seeks step from the 
 
 // drawing
 set_viewport(width, height, scale) -> envelope    // device pixels, and pixels per logical unit
+set_bounds(width, height) -> envelope             // logical px, for hosts that draw their own sprites
 render()
 read frame_len() bytes at frame_ptr()             // premultiplied RGBA8, stride width * 4
 ```
@@ -53,14 +54,16 @@ Notes that matter:
 - **The buffer pointer is stable** for the life of a simulation, but its
   *contents* are only valid until the next `advance`/`seek`/`trigger_burst`, or a `set_config`/`set_bounds`/
   `set_viewport` that culls live particles at once.
-- **On WASM, `set_config` can detach your `Float32Array`.** Read through the
+- **On WASM, `set_config` can detach your `Float32Array`**, as can any other
+  call that returns an envelope (`set_bounds`, `set_viewport`). Read through the
   `readBuffer` helper in `harnesses/node/brightfx.mjs`, which rebuilds the
   view when linear memory has moved.
 - **A handle is single-threaded.** Drive it from one thread.
 - **A panicked simulation goes inert and reports zero particles.** `guard`
   stops the unwind but cannot roll back a half-finished mutation, so rather
   than let a host keep reading torn state, the simulation poisons itself:
-  every further operation is a no-op, `set_config` returns
+  every further operation is a no-op, every call that returns an envelope
+  (`set_config`, `set_bounds`, `set_viewport`) returns
   `{"ok":false,"error":"simulation is poisoned by a panic; create a new one"}`,
   and `particle_count()` reports 0 so a host's raw read of `buffer_ptr()` stays
   in bounds. Recover by dropping the handle and building a new one.

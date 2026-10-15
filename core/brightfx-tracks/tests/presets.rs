@@ -247,7 +247,7 @@ struct Census {
 fn census(config: ParticleFxConfig, w: f32, h: f32, bounded: bool) -> Census {
     let mut sim = Simulation::new(config, 7);
     if bounded {
-        sim.set_bounds(w, h);
+        sim.set_bounds(w, h).unwrap();
     }
     let start = (STEADY_TIME / PLAYBACK_STEP).round() as usize;
     sim.seek(start as f32 * PLAYBACK_STEP);
@@ -353,7 +353,7 @@ fn at_time_zero_every_preset_is_already_at_steady_state() {
                 let steady = census(fitted.clone(), w, h, bounded);
                 let mut sim = Simulation::new(fitted, 7);
                 if bounded {
-                    sim.set_bounds(w, h);
+                    sim.set_bounds(w, h).unwrap();
                 }
                 sim.seek(0.0);
                 let at_zero = sim.particle_count() as usize;
@@ -462,7 +462,7 @@ fn culling_never_removes_a_particle_that_would_have_been_on_the_frame() {
             for seed in SEEDS {
                 let mut uncut = Simulation::new(fitted.clone(), seed);
                 let mut culled = Simulation::new(fitted.clone(), seed);
-                culled.set_bounds(w, h);
+                culled.set_bounds(w, h).unwrap();
                 let mut on_frame = 0usize;
                 for step in 1..=STEPS {
                     let time = step as f32 * PLAYBACK_STEP;

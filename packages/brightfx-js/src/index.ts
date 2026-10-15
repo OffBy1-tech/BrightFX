@@ -231,12 +231,13 @@ export class Simulation {
    *  draws its own sprites and never calls `setViewport` (which sets it
    *  itself, as `width / scale` by `height / scale`). Changing it makes the
    *  next `seek` replay from the start of the track (its `preroll` before
-   *  t=0). A non-finite or non-positive size
-   *  (including `undefined`, which wasm-bindgen turns into NaN) clears the
-   *  bounds and so turns culling off. When a host calls both `setViewport`
-   *  and `setBounds`, the last call wins. */
-  setBounds(width: number, height: number): void {
-    this.sim.setBounds(width, height);
+   *  t=0). A non-finite or non-positive size (including `undefined`, which
+   *  release wasm-bindgen glue turns into NaN, as from a container measured
+   *  before layout; a `--dev` build throws on it instead) returns `{ok:false, error}` and leaves the bounds as they were.
+   *  To stop culling, set `cullMargin` to `null`. When a host calls both
+   *  `setViewport` and `setBounds`, the last call wins. */
+  setBounds(width: number, height: number): ConfigResult {
+    return JSON.parse(this.sim.setBounds(width, height)) as ConfigResult;
   }
 
   setEmitter(x: number, y: number, vx: number, vy: number, active: boolean): void {

@@ -26,7 +26,12 @@ more than the margin outside the viewport. Lifetime then only has to be
 ### Simulation
 
 - `Simulation::set_bounds(width, height)` takes logical px. A non-finite or
-  non-positive dimension clears the bounds ("no bounds").
+  non-positive dimension clears the bounds ("no bounds"). Superseded in
+  #30/#38: such a size is now rejected (an `Err`, and an error envelope
+  through the ABI) and leaves the
+  bounds as they were, because a host measuring a container before layout
+  turned culling off without knowing. `cullMargin: null` is how to stop
+  culling.
 - State: `bounds: Option<(f32, f32)>`.
 - Changing the bounds calls `leave_baked()`. A baked `seek` then replays from
   zero instead of stepping forward from state built for another size (same

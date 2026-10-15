@@ -59,17 +59,30 @@ struct Failure: Error, CustomStringConvertible {
     var description: String { message }
 }
 
-/// Applies a config, releasing the Rust-owned envelope, and fails unless it
-/// was accepted.
+/// Copies an envelope out and releases it; Rust owns the buffer, so only
+/// bfx_string_free may free it.
+func takeEnvelope(_ envelopePtr: UnsafeMutablePointer<CChar>?, _ function: String) throws -> String {
+    guard let envelopePtr else { throw Failure("\(function) returned NULL") }
+    defer { bfx_string_free(envelopePtr) }
+    return String(cString: envelopePtr)
+}
+
+/// Applies a config and fails unless it was accepted.
 @discardableResult
 func applyConfig(_ sim: OpaquePointer, _ json: String, _ label: String) throws -> String {
-    guard let envelopePtr = json.withCString({ bfx_set_config(sim, $0) }) else {
-        throw Failure("bfx_set_config returned NULL for \(label)")
-    }
-    let envelope = String(cString: envelopePtr)
-    bfx_string_free(envelopePtr)
+    let envelope = try takeEnvelope(json.withCString({ bfx_set_config(sim, $0) }), "bfx_set_config (\(label))")
     guard envelope.contains("\"ok\":true") else { throw Failure("\(label) rejected: \(envelope)") }
     return envelope
+}
+
+func setBounds(_ sim: OpaquePointer?, _ width: Float, _ height: Float) throws -> String {
+    try takeEnvelope(bfx_set_bounds(sim, width, height), "bfx_set_bounds")
+}
+
+/// Sets the bounds and fails unless they were accepted.
+func applyBounds(_ sim: OpaquePointer, _ width: Float, _ height: Float) throws {
+    let envelope = try setBounds(sim, width, height)
+    guard envelope.contains("\"ok\":true") else { throw Failure("bounds \(width) x \(height) rejected: \(envelope)") }
 }
 
 /// Replays the emitter states the fixture recorded, one advance per frame,
@@ -240,11 +253,8 @@ func run() throws {
     defer { bfx_simulation_free(frameSim) }
     try applyConfig(frameSim, frameConfigJson, "frame config")
 
-    guard let viewportPtr = bfx_set_viewport(frameSim, frameExpected.width, frameExpected.height, frameExpected.scale) else {
-        throw Failure("bfx_set_viewport returned NULL")
-    }
-    let viewportEnvelope = String(cString: viewportPtr)
-    bfx_string_free(viewportPtr)
+    let viewportEnvelope = try takeEnvelope(
+        bfx_set_viewport(frameSim, frameExpected.width, frameExpected.height, frameExpected.scale), "bfx_set_viewport")
     guard viewportEnvelope.contains("\"ok\":true") else { throw Failure("viewport rejected: \(viewportEnvelope)") }
 
     drive(frameSim, frames: frameExpected.emitterFrames, burstFrame: frameExpected.burstFrame, dt: frameExpected.dt)
@@ -283,11 +293,19 @@ func run() throws {
     }
     print("  ok  set_config warns about a pool overflow and still accepts the config")
 
-    bfx_set_bounds(cullSim, 200, 200)
+    try applyBounds(cullSim, 200, 200)
     bfx_set_emitter(cullSim, 50, 50, 0, 0, true)
     for _ in 0..<5 { bfx_advance(cullSim, expected.dt) }
     guard bfx_particle_count(cullSim) > 0 else { throw Failure("cull check is vacuous: nothing spawned") }
-    bfx_set_bounds(cullSim, 1, 1)
+    // A size measured before layout (0, or NaN from an undefined) is
+    // rejected and keeps the frame, rather than turning culling off.
+    let liveBeforeZero = bfx_particle_count(cullSim)
+    let zeroEnvelope = try setBounds(cullSim, 0, 200)
+    guard zeroEnvelope.contains("\"ok\":false"), bfx_particle_count(cullSim) == liveBeforeZero else {
+        throw Failure("a zero size was not rejected cleanly: \(zeroEnvelope)")
+    }
+    print("  ok  bfx_set_bounds rejects a zero size with a message")
+    try applyBounds(cullSim, 1, 1)
     guard bfx_particle_count(cullSim) == 0 else {
         throw Failure("bfx_set_bounds did not cull the live particles: \(bfx_particle_count(cullSim)) left")
     }
@@ -299,7 +317,7 @@ func run() throws {
     guard let reCullSim = bfx_simulation_new(7) else { throw Failure("bfx_simulation_new returned NULL") }
     defer { bfx_simulation_free(reCullSim) }
     try applyConfig(reCullSim, cullConfigJson.replacingOccurrences(of: "\"cullMargin\": 0.0", with: "\"cullMargin\": 1000.0"), "wide-margin config")
-    bfx_set_bounds(reCullSim, 1, 1)
+    try applyBounds(reCullSim, 1, 1)
     bfx_set_emitter(reCullSim, 50, 50, 0, 0, true)
     for _ in 0..<5 { bfx_advance(reCullSim, expected.dt) }
     guard bfx_particle_count(reCullSim) > 0 else { throw Failure("set_config cull check is vacuous: nothing held") }
@@ -310,10 +328,7 @@ func run() throws {
     print("  ok  set_config with a smaller cullMargin culls at once")
 
     // --- error handling -------------------------------------------------------
-    let badPtr = "{ not json".withCString { bfx_set_config(sim, $0) }
-    guard let badPtr else { throw Failure("bfx_set_config returned NULL for bad input") }
-    let badEnvelope = String(cString: badPtr)
-    bfx_string_free(badPtr)
+    let badEnvelope = try takeEnvelope("{ not json".withCString { bfx_set_config(sim, $0) }, "bfx_set_config (bad input)")
     guard badEnvelope.contains("\"ok\":false") else { throw Failure("bad JSON was accepted: \(badEnvelope)") }
     print("  ok  an invalid config is rejected with a message, not a crash")
 
@@ -323,7 +338,7 @@ func run() throws {
     }
     bfx_advance(nil, 0.016)
     bfx_seek(nil, 1.0)
-    bfx_set_bounds(nil, 100, 100)
+    guard try setBounds(nil, 100, 100).contains("\"ok\":false") else { throw Failure("bfx_set_bounds accepted a null handle") }
     guard bfx_frame_len(nil) == 0, bfx_frame_ptr(nil) == nil else { throw Failure("null handle was not tolerated by frame accessors") }
     bfx_render(nil)
     bfx_simulation_free(nil)

@@ -87,10 +87,14 @@ impl BrightFx {
 
     /// Sets the logical-pixel bounds `cullMargin` is measured from, for a
     /// host that draws its own sprites and never calls `setViewport` (which
-    /// sets them itself).
+    /// sets them itself). Returns the JSON envelope as a string, like
+    /// `setViewport`; a non-finite or non-positive size (an `undefined`
+    /// arrives as NaN) is rejected and leaves the bounds as they were.
+    /// The envelope is allocated, so this too can grow linear memory and
+    /// detach existing views; rebuild them through `readBuffer`.
     #[wasm_bindgen(js_name = setBounds)]
-    pub fn set_bounds(&mut self, width: f32, height: f32) {
-        self.inner.set_bounds(width, height);
+    pub fn set_bounds(&mut self, width: f32, height: f32) -> String {
+        self.inner.set_bounds(width, height)
     }
 
     /// Rasterizes the current particle buffer into the frame.
@@ -131,7 +135,8 @@ impl BrightFx {
 
     /// Whether a panic has poisoned this simulation. A poisoned simulation is
     /// inert: every operation is a no-op, `particleCount` reports 0, and
-    /// `setConfig` returns an error envelope. Recover by dropping this
+    /// every call that returns an envelope (`setConfig`, `setBounds`,
+    /// `setViewport`) returns an error one. Recover by dropping this
     /// instance and creating a new one.
     #[wasm_bindgen(js_name = isPoisoned)]
     pub fn is_poisoned(&self) -> bool {

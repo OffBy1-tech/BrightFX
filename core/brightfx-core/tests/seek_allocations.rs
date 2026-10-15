@@ -1,6 +1,7 @@
 //! `seek` must not allocate once the config is set. On wasm an allocation
 //! can grow linear memory, which detaches every view a host holds of the
-//! particle buffer, and the docs only warn about that for `set_config`.
+//! particle buffer, and the docs only warn about that for the calls that
+//! return an envelope (`set_config`, `set_bounds`, `set_viewport`).
 //! The saved pre-roll is what makes this worth a test: its storage is
 //! reserved by `set_config`, and filling or restoring it copies into that.
 //!
@@ -56,7 +57,8 @@ fn culled(bounds: Option<(f32, f32)>) -> AbiSimulation {
     let envelope: serde_json::Value = serde_json::from_str(&sim.set_config(&config.to_string())).unwrap();
     assert_eq!(envelope["ok"], true, "{envelope}");
     if let Some((w, h)) = bounds {
-        sim.set_bounds(w, h);
+        let envelope: serde_json::Value = serde_json::from_str(&sim.set_bounds(w, h)).unwrap();
+        assert_eq!(envelope["ok"], true, "{envelope}");
     }
     sim
 }

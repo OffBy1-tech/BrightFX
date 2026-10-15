@@ -39,6 +39,7 @@ pub unsafe extern "C" fn bfx_simulation_free(sim: *mut BfxSimulation) {
 /// `sim` must be a valid handle or NULL; `json` must be a NUL-terminated
 /// string or NULL.
 #[no_mangle]
+#[must_use]
 pub unsafe extern "C" fn bfx_set_config(
     sim: *mut BfxSimulation,
     json: *const c_char,
@@ -55,9 +56,9 @@ pub unsafe extern "C" fn bfx_set_config(
     }
 }
 
-/// Releases a string returned by `bfx_set_config` or `bfx_set_viewport`
-/// (any function in this library that returns an owned `char*`). Safe to
-/// call with NULL.
+/// Releases a string returned by `bfx_set_config`, `bfx_set_bounds`, or
+/// `bfx_set_viewport` (any function in this library that returns an owned
+/// `char*`). Safe to call with NULL.
 ///
 /// # Safety
 /// `text` must be a pointer returned by this library, freed at most once.
@@ -86,16 +87,27 @@ pub unsafe extern "C" fn bfx_set_emitter(
 
 /// Sets the logical-unit rectangle `[0, width] x [0, height]` that the
 /// config's `cullMargin` is measured from, for a host with no viewport
-/// (sprite mode). `bfx_set_viewport` sets it itself. A non-finite or
-/// non-positive dimension clears it, and with no bounds nothing is culled.
-/// Culls the live particles against the new bounds immediately.
+/// (sprite mode). `bfx_set_viewport` sets it itself. Until it is set
+/// nothing is culled. Culls the live particles against the new bounds
+/// immediately.
+///
+/// Returns an owned JSON envelope (free with `bfx_string_free`):
+/// `{"ok":true,"clamped":[],"warnings":[]}`, or `{"ok":false,"error":"..."}`
+/// for a non-finite or non-positive dimension, which leaves the bounds as
+/// they were.
 ///
 /// # Safety
 /// `sim` must be a valid handle or NULL.
 #[no_mangle]
-pub unsafe extern "C" fn bfx_set_bounds(sim: *mut BfxSimulation, width: f32, height: f32) {
-    if let Some(sim) = sim.as_mut() {
-        sim.inner.set_bounds(width, height);
+#[must_use]
+pub unsafe extern "C" fn bfx_set_bounds(
+    sim: *mut BfxSimulation,
+    width: f32,
+    height: f32,
+) -> *mut c_char {
+    match sim.as_mut() {
+        Some(sim) => to_owned_c_string(&sim.inner.set_bounds(width, height)),
+        None => to_owned_c_string(&err_envelope("null simulation handle")),
     }
 }
 
@@ -175,7 +187,8 @@ pub extern "C" fn bfx_particle_floats() -> u32 {
 
 /// Whether a panic has poisoned this simulation. A poisoned simulation is
 /// inert: every operation is a no-op, `bfx_particle_count` reports 0, and
-/// `bfx_set_config` returns an error envelope. Recover by freeing the
+/// every call that returns an envelope (`bfx_set_config`, `bfx_set_bounds`,
+/// `bfx_set_viewport`) returns an error one. Recover by freeing the
 /// handle and creating a new one. Returns `false` for a NULL handle.
 ///
 /// # Safety
@@ -196,6 +209,7 @@ pub unsafe extern "C" fn bfx_is_poisoned(sim: *const BfxSimulation) -> bool {
 /// # Safety
 /// `sim` must be a valid handle or NULL.
 #[no_mangle]
+#[must_use]
 pub unsafe extern "C" fn bfx_set_viewport(
     sim: *mut BfxSimulation,
     width: u32,
@@ -336,13 +350,14 @@ mod tests {
         unsafe { bfx_advance(std::ptr::null_mut(), 0.016) };
         unsafe { bfx_seek(std::ptr::null_mut(), 1.0) };
         unsafe { bfx_trigger_burst(std::ptr::null_mut()) };
-        unsafe { bfx_set_bounds(std::ptr::null_mut(), 100.0, 100.0) };
         unsafe { bfx_simulation_free(std::ptr::null_mut()) };
         // Documented safe on NULL like the rest; hosts free envelopes they
         // may have received as NULL.
         unsafe { bfx_string_free(std::ptr::null_mut()) };
 
         let envelope = envelope_from(unsafe { bfx_set_config(std::ptr::null_mut(), config.as_ptr()) });
+        assert_eq!(envelope["ok"], false);
+        let envelope = envelope_from(unsafe { bfx_set_bounds(std::ptr::null_mut(), 100.0, 100.0) });
         assert_eq!(envelope["ok"], false);
     }
 
@@ -372,15 +387,23 @@ mod tests {
         envelope_from(unsafe { bfx_set_config(sim, config.as_ptr()) });
 
         // Inside a 200 x 200 frame the particles enter it and stay.
-        unsafe { bfx_set_bounds(sim, 200.0, 200.0) };
+        let envelope = envelope_from(unsafe { bfx_set_bounds(sim, 200.0, 200.0) });
+        assert_eq!(envelope["ok"], true);
         unsafe { bfx_set_emitter(sim, 50.0, 50.0, 0.0, 0.0, true) };
         for _ in 0..5 {
             unsafe { bfx_advance(sim, 0.015625) };
         }
         assert!(unsafe { bfx_particle_count(sim) } > 0, "test is vacuous: nothing spawned");
 
+        // A zero size is rejected and keeps the frame, so it culls nothing.
+        let live = unsafe { bfx_particle_count(sim) };
+        let envelope = envelope_from(unsafe { bfx_set_bounds(sim, 0.0, 200.0) });
+        assert_eq!(envelope["ok"], false);
+        assert_eq!(unsafe { bfx_particle_count(sim) }, live);
+
         // Shrinking the frame culls them at once, with no step in between.
-        unsafe { bfx_set_bounds(sim, 1.0, 1.0) };
+        let envelope = envelope_from(unsafe { bfx_set_bounds(sim, 1.0, 1.0) });
+        assert_eq!(envelope["ok"], true);
         assert_eq!(unsafe { bfx_particle_count(sim) }, 0);
         unsafe { bfx_simulation_free(sim) };
     }

@@ -10,7 +10,7 @@ that boundary.
 Not on the npm registry yet. Install from a vendored tarball:
 
 ```bash
-npm install ./vendor/brightfx-js-0.1.0.tgz
+npm install ./vendor/brightfx-js-0.2.0.tgz
 ```
 
 ## API
@@ -23,7 +23,7 @@ const sim = engine.create(seed);                 // one Simulation per instance
 
 sim.setConfig(effectConfig);                     // -> {ok:true,clamped:[...],warnings:[...]} | {ok:false,error}
 sim.setViewport(width, height, scale);            // device pixels, and pixels per logical unit
-sim.setBounds(width, height);                    // logical px, for sprite hosts; setViewport sets it itself
+sim.setBounds(width, height);                    // logical px, for sprite hosts; setViewport sets it itself; same envelope
 
 sim.setEmitter(x, y, vx, vy, active);
 sim.triggerBurst();

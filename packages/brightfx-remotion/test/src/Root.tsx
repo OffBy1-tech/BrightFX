@@ -1,7 +1,7 @@
 import React from "react";
 import { Composition, staticFile, useCurrentFrame } from "remotion";
 import { Simulation } from "brightfx-js";
-import { BrightFX } from "../../src/index";
+import { BrightFX, useBrightFX } from "../../src/index";
 import seekConfig from "../../../../core/fixtures/ffi-seek.config.json";
 import shared from "../fixtures/probe-effects.json";
 
@@ -118,6 +118,45 @@ const ModeSwitchTest: React.FC = () => {
   );
 };
 
+// Calls the hook directly with the given viewport and bounds, and reveals
+// the "loaded" probe once it returns a simulation.
+const HookTest: React.FC<{
+  viewport: { width: number; height: number } | null;
+  bounds: { width: number; height: number } | null;
+}> = ({ viewport, bounds }) => {
+  const sim = useBrightFX(effect, 42, WASM, viewport, bounds);
+  return (
+    <>
+      <Probes />
+      {sim && <LoadedMarker />}
+    </>
+  );
+};
+
+const LoadedMarker: React.FC = () => {
+  const { right, color } = shared.probes.loaded;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        right,
+        bottom: 0,
+        width: shared.probeSize,
+        height: shared.probeSize,
+        background: `rgb(${color.join(",")})`,
+        zIndex: 1,
+      }}
+    />
+  );
+};
+
+// A container measured before layout: rejected, warned about, not fatal.
+const ZeroBoundsTest: React.FC = () => <HookTest viewport={null} bounds={{ width: 0, height: 0 }} />;
+// Bounds are ignored beside a viewport, so a NaN there must not matter.
+const ViewportNaNBoundsTest: React.FC = () => (
+  <HookTest viewport={{ width: 200, height: 120 }} bounds={{ width: NaN, height: NaN }} />
+);
+
 const size = { fps: 30, width: 200, height: 120 };
 
 export const Root: React.FC = () => (
@@ -129,5 +168,7 @@ export const Root: React.FC = () => (
     <Composition id="PastTrackEndTest" component={PastTrackEndTest} durationInFrames={90} {...size} />
     <Composition id="BurstRangeTest" component={BurstRangeTest} durationInFrames={60} {...size} />
     <Composition id="ModeSwitchTest" component={ModeSwitchTest} durationInFrames={60} {...size} />
+    <Composition id="ZeroBoundsTest" component={ZeroBoundsTest} durationInFrames={60} {...size} />
+    <Composition id="ViewportNaNBoundsTest" component={ViewportNaNBoundsTest} durationInFrames={60} {...size} />
   </>
 );

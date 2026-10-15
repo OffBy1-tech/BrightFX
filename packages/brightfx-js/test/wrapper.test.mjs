@@ -217,6 +217,21 @@ test("setBounds lets cullMargin remove particles that leave the bounds", () => {
   }
 });
 
+test("setBounds reports an invalid size and keeps the bounds it had", () => {
+  const bounded = seekCount((sim) => assert.equal(sim.setBounds(200, 120).ok, true), 50);
+  // A host measuring a container before layout passes 0 or undefined
+  // (which wasm-bindgen turns into NaN). Neither may turn culling off.
+  for (const [w, h] of [[0, 120], [200, undefined], [-1, 120]]) {
+    const kept = seekCount((sim) => {
+      sim.setBounds(200, 120);
+      const result = sim.setBounds(w, h);
+      assert.equal(result.ok, false, `(${w}, ${h}) was accepted`);
+      assert.match(result.error, /finite and positive/);
+    }, 50);
+    assert.equal(kept.count, bounded.count, `(${w}, ${h}) changed the bounds`);
+  }
+});
+
 test("setViewport sets the same bounds, in logical units", () => {
   const viaBounds = seekCount((sim) => sim.setBounds(100, 60), 50);
   // Margin 50, so some particles survive at 100x60 and the sizes can be told apart.

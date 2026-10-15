@@ -9,6 +9,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#if defined(__GNUC__) || defined(__clang__)
+#define BFX_MUST_USE __attribute__((warn_unused_result))
+#else
+#define BFX_MUST_USE
+#endif
 
 /**
  * Opaque handle. Single-threaded: drive one handle from one thread.
@@ -43,12 +48,12 @@ void bfx_simulation_free(struct BfxSimulation *sim);
  * `sim` must be a valid handle or NULL; `json` must be a NUL-terminated
  * string or NULL.
  */
-char *bfx_set_config(struct BfxSimulation *sim, const char *json);
+BFX_MUST_USE char *bfx_set_config(struct BfxSimulation *sim, const char *json);
 
 /**
- * Releases a string returned by `bfx_set_config` or `bfx_set_viewport`
- * (any function in this library that returns an owned `char*`). Safe to
- * call with NULL.
+ * Releases a string returned by `bfx_set_config`, `bfx_set_bounds`, or
+ * `bfx_set_viewport` (any function in this library that returns an owned
+ * `char*`). Safe to call with NULL.
  *
  * # Safety
  * `text` must be a pointer returned by this library, freed at most once.
@@ -64,14 +69,19 @@ void bfx_set_emitter(struct BfxSimulation *sim, float x, float y, float vx, floa
 /**
  * Sets the logical-unit rectangle `[0, width] x [0, height]` that the
  * config's `cullMargin` is measured from, for a host with no viewport
- * (sprite mode). `bfx_set_viewport` sets it itself. A non-finite or
- * non-positive dimension clears it, and with no bounds nothing is culled.
- * Culls the live particles against the new bounds immediately.
+ * (sprite mode). `bfx_set_viewport` sets it itself. Until it is set
+ * nothing is culled. Culls the live particles against the new bounds
+ * immediately.
+ *
+ * Returns an owned JSON envelope (free with `bfx_string_free`):
+ * `{"ok":true,"clamped":[],"warnings":[]}`, or `{"ok":false,"error":"..."}`
+ * for a non-finite or non-positive dimension, which leaves the bounds as
+ * they were.
  *
  * # Safety
  * `sim` must be a valid handle or NULL.
  */
-void bfx_set_bounds(struct BfxSimulation *sim, float width, float height);
+BFX_MUST_USE char *bfx_set_bounds(struct BfxSimulation *sim, float width, float height);
 
 /**
  * # Safety
@@ -132,7 +142,8 @@ uint32_t bfx_particle_floats(void);
 /**
  * Whether a panic has poisoned this simulation. A poisoned simulation is
  * inert: every operation is a no-op, `bfx_particle_count` reports 0, and
- * `bfx_set_config` returns an error envelope. Recover by freeing the
+ * every call that returns an envelope (`bfx_set_config`, `bfx_set_bounds`,
+ * `bfx_set_viewport`) returns an error one. Recover by freeing the
  * handle and creating a new one. Returns `false` for a NULL handle.
  *
  * # Safety
@@ -149,7 +160,11 @@ bool bfx_is_poisoned(const struct BfxSimulation *sim);
  * # Safety
  * `sim` must be a valid handle or NULL.
  */
-char *bfx_set_viewport(struct BfxSimulation *sim, uint32_t width, uint32_t height, float scale);
+BFX_MUST_USE
+char *bfx_set_viewport(struct BfxSimulation *sim,
+                       uint32_t width,
+                       uint32_t height,
+                       float scale);
 
 /**
  * Rasterizes the current particle buffer into the frame. A no-op until
