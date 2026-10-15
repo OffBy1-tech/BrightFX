@@ -108,8 +108,6 @@ internal sealed class Expectation
     [JsonPropertyName("tolerance")] public float Tolerance { get; set; }
     [JsonPropertyName("particleCount")] public uint ParticleCount { get; set; }
     [JsonPropertyName("buffer")] public float[] Buffer { get; set; } = [];
-    /// Only the pre-roll fixture records one: where its forward check seeks.
-    [JsonPropertyName("forwardTime")] public float? ForwardTime { get; set; }
 }
 
 internal sealed class SeekExpectation
@@ -166,11 +164,6 @@ internal static class Program
         return envelope;
     }
 
-    /// Compares the live particle buffer against a recorded one within tolerance.
-    /// A non-finite float on either side fails outright: `Math.Abs(a - b) >
-    /// tolerance` is false whenever either operand is NaN. At tolerance 0 the
-    /// property is "bit-identical", so the bit patterns are compared -- that
-    /// is the only way -0.0 and +0.0 differ.
     /// `sim` has been seeked forward to `time`; a fresh handle seeked
     /// straight there must hold the same buffer -- at tolerance 0, because
     /// "bit-identical" is the whole property. An empty pool would compare
@@ -189,6 +182,11 @@ internal static class Program
         AssertBufferMatches(fresh.Ptr, count, stride, floats, 0f);
     }
 
+    /// Compares the live particle buffer against a recorded one within tolerance.
+    /// A non-finite float on either side fails outright: `Math.Abs(a - b) >
+    /// tolerance` is false whenever either operand is NaN. At tolerance 0 the
+    /// property is "bit-identical", so the bit patterns are compared -- that
+    /// is the only way -0.0 and +0.0 differ.
     private static void AssertBufferMatches(IntPtr sim, uint expectedCount, uint stride, float[] expected, float tolerance)
     {
         uint count = Native.bfx_particle_count(sim);
