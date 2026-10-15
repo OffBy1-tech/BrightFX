@@ -68,11 +68,16 @@ The track's timeline runs from `-preroll` to `duration`.
   when 0** (`serde(default, skip_serializing_if)`), so a minimum-version
   check (#33) can tell a v5 file from a v4 one.
 - Clamped by `clamp_to_bounds` to `[0, MAX_PREROLL]`, `MAX_PREROLL = 60`
-  s, reported in the envelope as `emitterTrack.preroll`. A non-finite
-  value becomes 0 (and is reported). `build_baked_track` applies the same
+  s, reported in the envelope as `emitterTrack.preroll`. NaN becomes 0
+  and +inf (a JSON number past f32) becomes 60, as an infinite `duration`
+  becomes its cap; both are reported. `build_baked_track` applies the same
   floor and ceiling itself, as it does for `duration`, so a config built
   from unvalidated JSON cannot drive an unbounded loop.
 - `EmitterKeyframe.time` and `EmitterTrigger.time` may be negative.
+- With a pre-roll, baking sorts the keyframes by time (stable, NaN times
+  dropped), since a pre-roll keyframe is naturally appended after the
+  others. A track with no pre-roll keeps its keyframes as authored, so v4
+  content with out-of-order keyframes plays as it did (added after review).
 - `SCHEMA_VERSION` becomes 5; `MIN_SCHEMA_VERSION` stays 1; the 4→5
   migration is a no-op. A v4 runtime rejects a v5 file with its existing
   "unsupported schemaVersion" message, which is the point of the bump: a
@@ -106,7 +111,9 @@ The track's timeline runs from `-preroll` to `duration`.
   config and bounds: `seek` keeps the state at the end of the pre-roll,
   which depends only on the config, seed, and bounds, and a backward seek
   resumes from it (added after review, which measured a 1.5 ms pre-roll
-  replay in wasm on every backward scrub).
+  replay in wasm on every backward scrub). Its memory is reserved by
+  `set_config`, so `seek` never allocates: on wasm an allocation can grow
+  memory and detach a host's view of the buffer.
   An earlier draft used each preset's own `lifetimeMax / 60` (1.5-5 s). Review
   found that a host that spreads a preset and raises `lifetimeMax` then
   gets the half-filled first frame back: the pre-roll is baked into the
@@ -128,7 +135,7 @@ The track's timeline runs from `-preroll` to `duration`.
   that round differently. Pre-roll is exactly "the timeline started earlier".
 - **Core, regressions:** forward seek equals fresh seek with pre-roll on;
   a trigger at a negative time fires at its step; one before `-preroll`
-  fires at the start; `preroll` clamps to `[0, 60]` and non-finite becomes
+  fires at the start; `preroll` clamps to `[0, 60]` and NaN becomes
   0, both reported; a v4 file parses with `preroll` 0; the existing
   fixtures stay bit-identical (the smoke script's "fixture not rewritten"
   guard enforces it).

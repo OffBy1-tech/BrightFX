@@ -87,14 +87,16 @@ struct BakedTrigger {
     kind: TriggerKind,
 }
 
-/// Everything a step can change, as it stands at the end of a track's
-/// pre-roll (absolute step `preroll_steps`). That state depends only on
-/// the config, the seed, and the bounds, so `seek` keeps it and a replay
-/// that starts over resumes from it instead of re-simulating the pre-roll.
-#[derive(Clone)]
-struct PrerollState {
+/// Everything a step can change. The render buffer is not here: it is
+/// rebuilt from this and the config. Kept in one struct so the copy of it
+/// `seek` saves at the end of a track's pre-roll cannot miss a field.
+struct StepState {
     pool: ParticlePool,
+    /// Drives every motion draw: speed, angle, life, jitter, rotation.
     rng: Rng,
+    /// Drives the palette pick, and nothing else. Separate from `rng` so
+    /// a colour-only config change never shifts a motion draw, and reset
+    /// with it so a replay deals the same colours.
     color_rng: Rng,
     spawn_budget: f32,
     global_hue: f32,
@@ -104,7 +106,63 @@ struct PrerollState {
     emitter_vy: f32,
     emitter_speed: f32,
     emitter_active: bool,
-    buffer: Vec<ParticleInstance>,
+}
+
+impl StepState {
+    /// The state at a reset. The pool's deque is allocated here, at its
+    /// full `capacity`, and never again.
+    fn new(seed: u64, capacity: usize) -> Self {
+        Self {
+            pool: ParticlePool::new(capacity),
+            rng: Rng::new(seed),
+            color_rng: color_rng(seed),
+            spawn_budget: 0.0,
+            global_hue: 0.0,
+            emitter_x: 0.0,
+            emitter_y: 0.0,
+            emitter_vx: 0.0,
+            emitter_vy: 0.0,
+            emitter_speed: 0.0,
+            emitter_active: false,
+        }
+    }
+
+    /// Back to `new(seed, _)`, keeping the pool's allocation.
+    fn reset(&mut self, seed: u64) {
+        let mut pool = std::mem::replace(&mut self.pool, ParticlePool::new(0));
+        pool.clear();
+        *self = Self { pool, ..Self::new(seed, 0) };
+    }
+
+    /// `clone_from` without allocating: the pool copies into its own
+    /// deque. The destructuring has no `..`, so a field added to the
+    /// struct does not compile until it is copied here too.
+    fn copy_from(&mut self, source: &Self) {
+        let Self {
+            pool,
+            rng,
+            color_rng,
+            spawn_budget,
+            global_hue,
+            emitter_x,
+            emitter_y,
+            emitter_vx,
+            emitter_vy,
+            emitter_speed,
+            emitter_active,
+        } = source;
+        self.pool.clone_from(pool);
+        self.rng = rng.clone();
+        self.color_rng = color_rng.clone();
+        self.spawn_budget = *spawn_budget;
+        self.global_hue = *global_hue;
+        self.emitter_x = *emitter_x;
+        self.emitter_y = *emitter_y;
+        self.emitter_vx = *emitter_vx;
+        self.emitter_vy = *emitter_vy;
+        self.emitter_speed = *emitter_speed;
+        self.emitter_active = *emitter_active;
+    }
 }
 
 /// `config.emitter_track` prepared for replay. Derived from `config`, so
@@ -120,7 +178,7 @@ struct BakedTrack {
     triggers: Vec<BakedTrigger>,
     /// `duration`, floored at 0 and capped at `MAX_EMITTER_TRACK_DURATION`.
     duration_cap: f32,
-    /// `preroll`, floored at 0, capped at `MAX_PREROLL`, 0 if not finite.
+    /// `preroll` through `sanitize_preroll`: in `0..=MAX_PREROLL`, NaN is 0.
     preroll: f32,
     /// Whole grid steps the timeline runs before authored t=0. Step
     /// indices are absolute: 0 is the start of the pre-roll and
@@ -162,21 +220,7 @@ pub struct Simulation {
     /// `Send`.
     baked_track: Option<Arc<BakedTrack>>,
     seed: u64,
-    pool: ParticlePool,
-    /// Drives every motion draw: speed, angle, life, jitter, rotation.
-    rng: Rng,
-    /// Drives the palette pick, and nothing else. Separate from `rng` so
-    /// a colour-only config change never shifts a motion draw, and reset
-    /// with it so a replay deals the same colours.
-    color_rng: Rng,
-    spawn_budget: f32,
-    global_hue: f32,
-    emitter_x: f32,
-    emitter_y: f32,
-    emitter_vx: f32,
-    emitter_vy: f32,
-    emitter_speed: f32,
-    emitter_active: bool,
+    live: StepState,
     buffer: Vec<ParticleInstance>,
     /// Absolute whole steps applied since the last reset in baked mode
     /// (step 0 is the start of the pre-roll, see
@@ -190,31 +234,25 @@ pub struct Simulation {
     /// it, and while it is `None` nothing is culled. Part of the state a
     /// replay depends on, so changing it clears `baked` (see `set_bounds`).
     bounds: Option<(f32, f32)>,
-    /// The state at the end of the pre-roll, once a seek has run through
-    /// it. Dropped wherever its inputs change: `set_config` and a
-    /// `set_bounds` that changes the bounds. Nothing else writes the
-    /// config, seed, or bounds.
-    preroll_state: Option<Box<PrerollState>>,
+    /// Room for the state at the end of the track's pre-roll, which
+    /// depends only on the config, the seed, and the bounds. `Some` exactly
+    /// when the track has a pre-roll, allocated where the config is set so
+    /// that `seek`, which fills it, never allocates: on wasm an allocation
+    /// can grow memory and detach a host's view of the buffer.
+    preroll_store: Option<StepState>,
+    /// Whether `preroll_store` holds the state for the current inputs. Only
+    /// `seek` sets it; `replay_inputs_changed` clears it.
+    preroll_saved: bool,
 }
 
 impl Simulation {
     pub fn new(config: ParticleFxConfig, seed: u64) -> Self {
-        Self {
+        let mut sim = Self {
             palette: build_palette(&config),
             baked_track: build_baked_track(&config),
             config,
             seed,
-            pool: ParticlePool::new(MAX_PARTICLES),
-            rng: Rng::new(seed),
-            color_rng: color_rng(seed),
-            spawn_budget: 0.0,
-            global_hue: 0.0,
-            emitter_x: 0.0,
-            emitter_y: 0.0,
-            emitter_vx: 0.0,
-            emitter_vy: 0.0,
-            emitter_speed: 0.0,
-            emitter_active: false,
+            live: StepState::new(seed, MAX_PARTICLES),
             // Preallocated so the pointer handed across the FFI boundary is
             // stable for the life of the simulation. `rebuild_buffer` only
             // ever clears and re-pushes, never exceeding MAX_PARTICLES, so
@@ -222,8 +260,11 @@ impl Simulation {
             buffer: Vec::with_capacity(MAX_PARTICLES),
             baked: None,
             bounds: None,
-            preroll_state: None,
-        }
+            preroll_store: None,
+            preroll_saved: false,
+        };
+        sim.reserve_preroll_store();
+        sim
     }
 
     /// Swaps the config. Live particles keep their state, except that the
@@ -237,8 +278,8 @@ impl Simulation {
         // Live particles keep their state (that is the boundary's contract),
         // but the track may have changed, so the next seek replays, and
         // the pre-roll it would resume from was built for the old config.
-        self.leave_baked();
-        self.preroll_state = None;
+        self.replay_inputs_changed();
+        self.reserve_preroll_store();
         // The (possibly new) `cullMargin` applies to what is already there,
         // so a render without a step does not show particles it would drop.
         self.recull();
@@ -266,8 +307,7 @@ impl Simulation {
         let bounds = valid.then_some((width, height));
         if bounds != self.bounds {
             self.bounds = bounds;
-            self.leave_baked();
-            self.preroll_state = None;
+            self.replay_inputs_changed();
             self.recull();
         }
     }
@@ -279,9 +319,9 @@ impl Simulation {
         let Some((margin, w, h)) = self.cull_rule() else {
             return;
         };
-        let before = self.pool.len();
-        self.pool.retain_mut(|p| apply_cull(p, margin, w, h));
-        if self.pool.len() != before {
+        let before = self.live.pool.len();
+        self.live.pool.retain_mut(|p| apply_cull(p, margin, w, h));
+        if self.live.pool.len() != before {
             self.rebuild_buffer();
         }
     }
@@ -323,12 +363,12 @@ impl Simulation {
         let y = if y.is_finite() { y } else { 0.0 };
         let vx = if vx.is_finite() { vx } else { 0.0 };
         let vy = if vy.is_finite() { vy } else { 0.0 };
-        self.emitter_x = x;
-        self.emitter_y = y;
-        self.emitter_vx = vx;
-        self.emitter_vy = vy;
-        self.emitter_speed = (vx * vx + vy * vy).sqrt();
-        self.emitter_active = active;
+        self.live.emitter_x = x;
+        self.live.emitter_y = y;
+        self.live.emitter_vx = vx;
+        self.live.emitter_vy = vy;
+        self.live.emitter_speed = (vx * vx + vy * vy).sqrt();
+        self.live.emitter_active = active;
     }
 
     pub fn trigger_burst(&mut self) {
@@ -360,7 +400,7 @@ impl Simulation {
     }
 
     pub fn particle_count(&self) -> usize {
-        self.pool.len()
+        self.live.pool.len()
     }
 
     /// The loaded config's name. Lets hosts confirm which effect is active
@@ -378,25 +418,38 @@ impl Simulation {
     /// forward seek would step on from a state the track did not produce.
     /// `every_public_mutator_is_known_to_this_suite` fails when a public
     /// `&mut self` method is added, and `every_state_mutator_invalidates_forward_seek`
-    /// checks each listed one against a fresh seek.
+    /// checks each listed one against a fresh seek. A call that changes a
+    /// replay input calls `replay_inputs_changed` instead, which also drops
+    /// the saved pre-roll.
     fn leave_baked(&mut self) {
         self.baked = None;
     }
 
+    /// For a call that changes what a replay computes -- the config or the
+    /// bounds; the seed is fixed -- rather than only the live state: drops
+    /// the baked position and the saved pre-roll, which was built from the
+    /// old inputs. `every_state_mutator_keeps_a_backward_seek_pure` checks
+    /// that each mutator that needs this calls it.
+    fn replay_inputs_changed(&mut self) {
+        self.leave_baked();
+        self.preroll_saved = false;
+    }
+
+    /// Allocates `preroll_store` when the track has a pre-roll and frees it
+    /// when it has none, so a pre-roll costs its memory up front.
+    fn reserve_preroll_store(&mut self) {
+        let wanted = self.baked_track.as_ref().is_some_and(|track| track.preroll_steps > 0);
+        if !wanted {
+            self.preroll_store = None;
+        } else if self.preroll_store.is_none() {
+            self.preroll_store = Some(StepState::new(self.seed, MAX_PARTICLES));
+        }
+    }
+
     fn reset(&mut self) {
         self.leave_baked();
-        self.pool.clear();
-        self.rng = Rng::new(self.seed);
-        self.color_rng = color_rng(self.seed);
-        self.spawn_budget = 0.0;
-        self.global_hue = 0.0;
+        self.live.reset(self.seed);
         self.buffer.clear();
-        self.emitter_x = 0.0;
-        self.emitter_y = 0.0;
-        self.emitter_vx = 0.0;
-        self.emitter_vy = 0.0;
-        self.emitter_speed = 0.0;
-        self.emitter_active = false;
     }
 
     /// Runs baked playback *through* the grid point at or after `time`:
@@ -446,12 +499,12 @@ impl Simulation {
         let n = track.preroll_steps + grid_step(target);
 
         // On the forward path the `active` the loop starts from is
-        // `self.emitter_active` as the previous seek left it. That is
+        // `self.live.emitter_active` as the previous seek left it. That is
         // sound because every other writer of `emitter_active` calls
         // `leave_baked` first, so a cursor can only survive a pure replay.
         let from = match self.baked {
             Some(step) if step <= n => step,
-            _ => self.restart_track(&track, n),
+            _ => self.restart_track(&track),
         };
 
         for k in from..n {
@@ -471,15 +524,18 @@ impl Simulation {
             // Update position/velocity for this step before evaluating
             // triggers, so a `Burst` firing this step spawns at the
             // correct sampled position.
-            let active = self.emitter_active;
+            let active = self.live.emitter_active;
             self.place_emitter(x, y, vx, vy, active);
 
             self.fire_triggers(&track, k + 1);
 
             self.step(PLAYBACK_STEP);
 
-            if k + 1 == track.preroll_steps && self.preroll_state.is_none() {
-                self.save_preroll_state();
+            if k + 1 == track.preroll_steps && !self.preroll_saved {
+                if let Some(store) = self.preroll_store.as_mut() {
+                    store.copy_from(&self.live);
+                    self.preroll_saved = true;
+                }
             }
         }
 
@@ -494,16 +550,18 @@ impl Simulation {
     /// is placed at `-preroll` exactly, while the first step's grid time is
     /// the grid point at or after it (off-grid, up to a step earlier).
     ///
-    /// A replay to step `n` at or past the end of the pre-roll resumes from
-    /// the saved `preroll_state` when there is one, which is the state the
+    /// A replay resumes from the saved end of the pre-roll when there is
+    /// one: every seek target is at or past it, and that state is what the
     /// steps it skips would have produced. Returns the step the replay
     /// continues from.
-    fn restart_track(&mut self, track: &BakedTrack, n: u32) -> u32 {
+    fn restart_track(&mut self, track: &BakedTrack) -> u32 {
         self.reset();
-        if track.preroll_steps > 0 && n >= track.preroll_steps {
-            if let Some(state) = self.preroll_state.take() {
-                self.restore_preroll_state(&state);
-                self.preroll_state = Some(state);
+        if self.preroll_saved {
+            if let Some(saved) = &self.preroll_store {
+                self.live.copy_from(saved);
+                // The buffer as the last pre-roll step left it: a step ends
+                // by rebuilding it from the state just restored.
+                self.rebuild_buffer();
                 return track.preroll_steps;
             }
         }
@@ -511,41 +569,6 @@ impl Simulation {
         self.place_emitter(x0, y0, vx0, vy0, false);
         self.fire_triggers(track, 0);
         0
-    }
-
-    fn save_preroll_state(&mut self) {
-        self.preroll_state = Some(Box::new(PrerollState {
-            pool: self.pool.clone(),
-            rng: self.rng.clone(),
-            color_rng: self.color_rng.clone(),
-            spawn_budget: self.spawn_budget,
-            global_hue: self.global_hue,
-            emitter_x: self.emitter_x,
-            emitter_y: self.emitter_y,
-            emitter_vx: self.emitter_vx,
-            emitter_vy: self.emitter_vy,
-            emitter_speed: self.emitter_speed,
-            emitter_active: self.emitter_active,
-            buffer: self.buffer.clone(),
-        }));
-    }
-
-    fn restore_preroll_state(&mut self, state: &PrerollState) {
-        self.pool.clone_from(&state.pool);
-        self.rng = state.rng.clone();
-        self.color_rng = state.color_rng.clone();
-        self.spawn_budget = state.spawn_budget;
-        self.global_hue = state.global_hue;
-        self.emitter_x = state.emitter_x;
-        self.emitter_y = state.emitter_y;
-        self.emitter_vx = state.emitter_vx;
-        self.emitter_vy = state.emitter_vy;
-        self.emitter_speed = state.emitter_speed;
-        self.emitter_active = state.emitter_active;
-        // Copied into the existing Vec, never swapped for the saved one:
-        // the buffer's pointer crosses the FFI and must stay put.
-        self.buffer.clear();
-        self.buffer.extend_from_slice(&state.buffer);
     }
 
     /// Applies the triggers that fire in `step`, in time order. Each
@@ -556,8 +579,8 @@ impl Simulation {
             if trig.fire_step == step {
                 match trig.kind {
                     TriggerKind::Burst => self.spawn_burst(),
-                    TriggerKind::StartContinuous => self.emitter_active = true,
-                    TriggerKind::StopContinuous => self.emitter_active = false,
+                    TriggerKind::StartContinuous => self.live.emitter_active = true,
+                    TriggerKind::StopContinuous => self.live.emitter_active = false,
                 }
             }
         }
@@ -567,15 +590,15 @@ impl Simulation {
         let seconds = dt.max(0.0).min(MAX_DELTA_SECONDS);
         let fe = seconds * REFERENCE_HZ;
 
-        if self.emitter_active {
-            self.spawn_budget += self.config.emitter.spawn_rate_while_active * fe;
-            let count = (self.spawn_budget.floor() as i32).clamp(0, 40) as u32;
-            self.spawn_budget -= count as f32;
+        if self.live.emitter_active {
+            self.live.spawn_budget += self.config.emitter.spawn_rate_while_active * fe;
+            let count = (self.live.spawn_budget.floor() as i32).clamp(0, 40) as u32;
+            self.live.spawn_budget -= count as f32;
             for _ in 0..count {
                 self.spawn_particle(false);
             }
         } else if self.config.emitter.spawn_rate_idle > 0.0
-            && self.rng.f32() < self.config.emitter.spawn_rate_idle * 0.3
+            && self.live.rng.f32() < self.config.emitter.spawn_rate_idle * 0.3
         {
             self.spawn_particle(false);
         }
@@ -585,14 +608,14 @@ impl Simulation {
         let drag = self.config.drag;
         let turbulence = self.config.turbulence;
         let vortex = self.config.vortex_attraction;
-        let emitter_x = self.emitter_x;
-        let emitter_y = self.emitter_y;
+        let emitter_x = self.live.emitter_x;
+        let emitter_y = self.live.emitter_y;
         let size_curve = self.config.size_curve;
 
         // Only culls when the author asked for it and the host said how big
         // the frame is.
         let cull = self.cull_rule();
-        self.pool.retain_mut(|p| {
+        self.live.pool.retain_mut(|p| {
             p.life += fe;
             if p.life >= p.max_life {
                 return false;
@@ -646,8 +669,8 @@ impl Simulation {
 
     fn spawn_particle(&mut self, is_burst: bool) {
         let emitter = self.config.emitter.clone();
-        let dx = self.emitter_vx;
-        let dy = self.emitter_vy;
+        let dx = self.live.emitter_vx;
+        let dy = self.live.emitter_vy;
 
         let pattern = if is_burst {
             EmissionPattern::RadialBurst
@@ -656,71 +679,74 @@ impl Simulation {
         };
 
         let mut speed = self
+            .live
             .rng
             .range(self.config.initial_speed_min, self.config.initial_speed_max);
 
         let angle = if is_burst {
             speed *= 1.4;
-            self.rng.range(0.0, std::f32::consts::TAU)
+            self.live.rng.range(0.0, std::f32::consts::TAU)
         } else {
             match pattern {
                 EmissionPattern::RadialBurst
                 | EmissionPattern::VortexSpiral
-                | EmissionPattern::Orbit => self.rng.range(0.0, std::f32::consts::TAU),
+                | EmissionPattern::Orbit => self.live.rng.range(0.0, std::f32::consts::TAU),
                 EmissionPattern::Fountain => {
                     let base = (emitter.emission_angle - 90.0).to_radians();
                     let spread = emitter.emission_spread.to_radians();
-                    base + (self.rng.f32() - 0.5) * spread
+                    base + (self.live.rng.f32() - 0.5) * spread
                 }
                 EmissionPattern::DirectionalCone => {
                     let base = emitter.emission_angle.to_radians();
                     let spread = emitter.emission_spread.to_radians();
-                    base + (self.rng.f32() - 0.5) * spread
+                    base + (self.live.rng.f32() - 0.5) * spread
                 }
                 EmissionPattern::Trail => {
                     if (dx * dx + dy * dy).sqrt() > 0.1 {
                         let move_angle = dy.atan2(dx);
                         move_angle
                             + std::f32::consts::PI
-                            + (self.rng.f32() - 0.5) * emitter.emission_spread.to_radians()
+                            + (self.live.rng.f32() - 0.5) * emitter.emission_spread.to_radians()
                     } else {
-                        self.rng.range(0.0, std::f32::consts::TAU)
+                        self.live.rng.range(0.0, std::f32::consts::TAU)
                     }
                 }
             }
         };
 
-        let vx = angle.cos() * speed + self.emitter_vx * emitter.velocity_inheritance * 0.15;
-        let vy = angle.sin() * speed + self.emitter_vy * emitter.velocity_inheritance * 0.15;
+        let vx = angle.cos() * speed + self.live.emitter_vx * emitter.velocity_inheritance * 0.15;
+        let vy = angle.sin() * speed + self.live.emitter_vy * emitter.velocity_inheritance * 0.15;
 
         let max_life = self
+            .live
             .rng
             .range(self.config.lifetime_min, self.config.lifetime_max);
 
-        self.global_hue = (self.global_hue + self.config.rainbow_speed * 0.5) % 360.0;
+        self.live.global_hue = (self.live.global_hue + self.config.rainbow_speed * 0.5) % 360.0;
         let color_rgb = if self.config.color_mode == ColorMode::RainbowCycle {
-            hsl_to_rgb(self.global_hue, 0.9, 0.6)
+            hsl_to_rgb(self.live.global_hue, 0.9, 0.6)
         } else {
             hex_to_rgb(&self.config.primary_color)
         };
         // Drawn in every mode, so switching into random-palette later finds
         // a pick already on every live particle.
-        let palette_pick = self.color_rng.f32();
+        let palette_pick = self.live.color_rng.f32();
 
         let rotation_speed = self
+            .live
             .rng
             .range(self.config.rotation_speed_min, self.config.rotation_speed_max);
         // Drawn only in random mode, so a fixed-spin config keeps the
         // motion sequence it has always had.
-        let rotation_speed = if self.config.spin_direction == SpinDirection::Random && self.rng.f32() < 0.5 {
+        let rotation_speed = if self.config.spin_direction == SpinDirection::Random && self.live.rng.f32() < 0.5 {
             -rotation_speed
         } else {
             rotation_speed
         };
 
         let particle = Particle {
-            x: self.emitter_x + (self.rng.f32() - 0.5) * 4.0,
-            y: self.emitter_y + (self.rng.f32() - 0.5) * 4.0,
+            x: self.live.emitter_x + (self.live.rng.f32() - 0.5) * 4.0,
+            y: self.live.emitter_y + (self.live.rng.f32() - 0.5) * 4.0,
             vx,
             vy,
             size: self.config.start_size,
@@ -733,16 +759,16 @@ impl Simulation {
             end_alpha: self.config.end_alpha,
             color_rgb,
             palette_pick,
-            hue: self.global_hue,
+            hue: self.live.global_hue,
             life: 0.0,
             max_life,
-            rotation: self.rng.range(0.0, std::f32::consts::TAU),
+            rotation: self.live.rng.range(0.0, std::f32::consts::TAU),
             rotation_speed,
-            turbulence_seed: self.rng.range(0.0, 100.0),
+            turbulence_seed: self.live.rng.range(0.0, 100.0),
             entered: false,
         };
 
-        self.pool.spawn(particle);
+        self.live.pool.spawn(particle);
     }
 
     fn rebuild_buffer(&mut self) {
@@ -752,9 +778,9 @@ impl Simulation {
         let secondary = &self.config.secondary_color;
         let accent = &self.config.accent_color;
         let palette = &self.palette;
-        let emitter_speed = self.emitter_speed;
+        let emitter_speed = self.live.emitter_speed;
 
-        for p in self.pool.iter() {
+        for p in self.live.pool.iter() {
             let progress = if p.max_life > 0.0 { p.life / p.max_life } else { 1.0 };
             let rgb = match color_mode {
                 ColorMode::GradientLifetime => {
@@ -931,14 +957,19 @@ fn build_baked_track(config: &ParticleFxConfig) -> Option<Arc<BakedTrack>> {
     let preroll = sanitize_preroll(track.preroll);
     let preroll_steps = grid_step(preroll);
 
-    // `sample_track` assumes ascending time, and the authoring order is
-    // free (a pre-roll keyframe is naturally appended after the t >= 0
-    // ones). A NaN time has no place on the path, and leaving it in would
-    // make the partial-order comparison non-transitive, which the standard
-    // sort may panic on. A stable sort, like the triggers'.
+    // `sample_track` assumes ascending time, and with a pre-roll the
+    // authoring order is free (a pre-roll keyframe is naturally appended
+    // after the t >= 0 ones). A NaN time has no place on the path, and
+    // leaving it in would make the partial-order comparison
+    // non-transitive, which the standard sort may panic on. A stable sort,
+    // like the triggers'. A track with no pre-roll keeps its keyframes
+    // exactly as authored, so content made before pre-roll existed plays
+    // as it always did, out-of-order keyframes included.
     let mut keyframes = track.keyframes.clone();
-    keyframes.retain(|k| !k.time.is_nan());
-    keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+    if preroll_steps > 0 {
+        keyframes.retain(|k| !k.time.is_nan());
+        keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+    }
 
     let mut triggers = track.triggers.clone();
     // A NaN time makes the partial-order sort non-transitive and would fire
@@ -1440,14 +1471,16 @@ mod tests {
     #[test]
     fn a_replay_that_resumes_from_the_saved_preroll_is_bit_identical() {
         // seek(1.0) runs through the pre-roll and saves its end state; each
-        // later backward seek restarts from it (or, inside the pre-roll,
-        // from the very start) and must match a fresh handle. A live call
+        // later backward seek restarts from it and must match a fresh
+        // handle. t=0 is the end of the pre-roll itself, where the replay
+        // runs no step and the buffer is rebuilt from the restored state.
+        // A live call
         // in between leaves the saved state valid: it depends only on the
         // config, the seed, and the bounds.
         let config = prerolled_config(0.5, 0.0, -30.0, 60.0);
         let mut sim = Simulation::new(config.clone(), 5);
         sim.seek(1.0);
-        assert!(sim.preroll_state.is_some(), "a seek through the pre-roll saves its end");
+        assert!(sim.preroll_saved, "a seek through the pre-roll saves its end");
         for time in [0.75f32, 0.0, 0.3, 0.6] {
             sim.trigger_burst();
             sim.advance(PLAYBACK_STEP);
@@ -1465,7 +1498,7 @@ mod tests {
         sim.seek(1.0);
         let other = prerolled_config(0.5, 0.0, 200.0, 100.0);
         sim.set_config(other.clone());
-        assert!(sim.preroll_state.is_none());
+        assert!(!sim.preroll_saved);
         sim.seek(0.25);
         let mut fresh = Simulation::new(other, 5);
         fresh.seek(0.25);
@@ -1484,10 +1517,10 @@ mod tests {
         let mut sim = Simulation::new(config.clone(), 5);
         sim.seek(1.0);
         sim.set_bounds(20.0, 20.0);
-        assert!(sim.preroll_state.is_none());
+        assert!(!sim.preroll_saved);
         sim.seek(1.0);
         sim.set_bounds(20.0, 20.0);
-        assert!(sim.preroll_state.is_some(), "unchanged bounds keep it");
+        assert!(sim.preroll_saved, "unchanged bounds keep it");
         sim.seek(0.25);
         let mut fresh = Simulation::new(config.clone(), 5);
         fresh.set_bounds(20.0, 20.0);
@@ -1925,6 +1958,27 @@ mod tests {
         let mut sim = Simulation::new(base_config(), 1);
         sim.seek(1.0);
         assert_eq!(sim.particle_count(), 0);
+    }
+
+    #[test]
+    fn a_track_with_no_preroll_samples_its_keyframes_as_authored() {
+        // Before pre-roll, keyframes were never sorted: out of order, the
+        // first window that brackets `t` wins. Here [0, 2] brackets t=1,
+        // halfway from x=0 to x=60, where sorted keyframes would give 0.
+        let mut config = burst_only_at(0.0, 1.0);
+        let track = config.emitter_track.as_mut().unwrap();
+        track.duration = 2.0;
+        track.keyframes = vec![
+            EmitterKeyframe { time: 0.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+            EmitterKeyframe { time: 2.0, x: 60.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+            EmitterKeyframe { time: 1.0, x: 0.0, y: 0.0, vx: Some(0.0), vy: Some(0.0) },
+        ];
+        let mut sim = Simulation::new(config, 5);
+        sim.seek(1.0);
+        assert_eq!(sim.particle_count(), 3);
+        for p in sim.buffer() {
+            assert!((p.x - 30.0).abs() < 2.5, "x was {}", p.x);
+        }
     }
 
     #[test]
@@ -2459,7 +2513,7 @@ mod tests {
     /// The cull rule as an invariant: after a step, a particle outside the
     /// cull rectangle has not entered it and is not moving away from it.
     fn assert_survivors_obey_the_cull_rule(sim: &Simulation, margin: f32, w: f32, h: f32) {
-        for p in sim.pool.iter() {
+        for p in sim.live.pool.iter() {
             if !within_margin(p.x, p.y, margin, w, h) {
                 assert!(!p.entered, "an entered particle survived outside at ({}, {})", p.x, p.y);
                 assert!(!moving_away(p, margin, w, h), "a particle moving away survived at ({}, {})", p.x, p.y);
@@ -2474,7 +2528,7 @@ mod tests {
         let sim = runner_from(-50.0, 0.0, 0.0, Some(0.0));
         assert_eq!(runner_from(-50.0, 0.0, 0.0, None).particle_count(), 1, "test is vacuous");
         assert_eq!(sim.particle_count(), 1);
-        assert!(sim.pool.iter().all(|p| !p.entered));
+        assert!(sim.live.pool.iter().all(|p| !p.entered));
     }
 
     #[test]
@@ -2486,7 +2540,7 @@ mod tests {
         assert_eq!(sim.particle_count(), 1, "culled on the way in");
         advance_steps(&mut sim, 7); // step 8, x about 50
         assert_eq!(sim.particle_count(), 1, "culled while crossing the frame");
-        assert!(sim.pool.iter().all(|p| p.entered), "never marked as entered");
+        assert!(sim.live.pool.iter().all(|p| p.entered), "never marked as entered");
         advance_steps(&mut sim, 8); // step 16, x about 130
         assert_eq!(sim.particle_count(), 0, "kept after leaving");
     }
@@ -2504,7 +2558,7 @@ mod tests {
         // 20 px left of the frame, inside a margin of 50, moving away.
         let mut sim = runner_from(-20.0, 180.0, 10.0, Some(50.0));
         assert_eq!(sim.particle_count(), 1, "culled while still inside the margin");
-        assert!(sim.pool.iter().all(|p| p.entered), "not marked as entered");
+        assert!(sim.live.pool.iter().all(|p| p.entered), "not marked as entered");
         advance_steps(&mut sim, 7); // step 8, x about -100, past -50
         assert_eq!(sim.particle_count(), 0, "kept past the margin");
     }
@@ -2693,16 +2747,16 @@ mod tests {
         assert_eq!(sim.particle_count(), 0, "outside and moving away (right) should go");
 
         let mut sim = one_runner(Some(0.0));
-        sim.pool.retain_mut(|p| {
+        sim.live.pool.retain_mut(|p| {
             p.vx = -10.0; // now heading back toward a frame to its left
             true
         });
         sim.set_bounds(10.0, 100.0);
         assert_eq!(sim.particle_count(), 1, "outside but moving toward the frame must stay");
-        assert!(sim.pool.iter().all(|p| !p.entered));
+        assert!(sim.live.pool.iter().all(|p| !p.entered));
 
         sim.set_bounds(200.0, 100.0);
-        assert!(sim.pool.iter().all(|p| p.entered), "inside the new frame, not marked entered");
+        assert!(sim.live.pool.iter().all(|p| p.entered), "inside the new frame, not marked entered");
     }
 
     #[test]
@@ -2753,9 +2807,9 @@ mod tests {
         assert_eq!(found, expected, "a public mutator is not covered by the forward-seek invalidation test");
     }
 
-    #[test]
-    fn every_state_mutator_invalidates_forward_seek() {
-        let apply: [(&str, fn(&mut Simulation)); 5] = [
+    /// Each of `STATE_MUTATORS`, applied in a way that changes the state.
+    fn state_mutators() -> [(&'static str, fn(&mut Simulation)); 5] {
+        [
             ("set_config", |sim| {
                 let mut config = sim.config().clone();
                 config.gravity_y += 3.0;
@@ -2765,7 +2819,12 @@ mod tests {
             ("set_emitter", |sim| sim.set_emitter(5.0, 5.0, 1.0, 1.0, true)),
             ("trigger_burst", |sim| sim.trigger_burst()),
             ("advance", |sim| sim.advance(TICK)),
-        ];
+        ]
+    }
+
+    #[test]
+    fn every_state_mutator_invalidates_forward_seek() {
+        let apply = state_mutators();
         assert_eq!(apply.map(|(name, _)| name), STATE_MUTATORS, "keep this table in step with STATE_MUTATORS");
 
         let make = || {
@@ -2791,6 +2850,40 @@ mod tests {
             stepped.seek(0.8);
 
             assert_eq!(xy(&fresh), xy(&stepped), "{name}: forward seek differs from a fresh seek");
+        }
+    }
+
+    #[test]
+    fn every_state_mutator_keeps_a_backward_seek_pure() {
+        // The saved pre-roll is the other state that can outlive a mutator.
+        // A backward seek resumes from it, so a mutator that changes what a
+        // replay computes (and so the pre-roll) must drop it. Each mutator
+        // is applied after a seek has saved it, and the backward seek that
+        // follows must match a handle that never saved one.
+        let make = || {
+            let mut config = prerolled_config(0.5, 0.0, -30.0, 60.0);
+            config.cull_margin = Some(0.0);
+            config.initial_speed_min = 2.0;
+            config.initial_speed_max = 2.0;
+            Simulation::new(config, 5)
+        };
+        let mut untouched = make();
+        untouched.seek(0.3);
+        for (name, mutate) in state_mutators() {
+            let mut fresh = make();
+            mutate(&mut fresh);
+            fresh.seek(0.3);
+
+            let mut scrubbed = make();
+            scrubbed.seek(0.8);
+            assert!(scrubbed.preroll_saved, "{name}: vacuous, no saved pre-roll");
+            mutate(&mut scrubbed);
+            scrubbed.seek(0.3);
+
+            assert_eq!(buffer_bits(&fresh), buffer_bits(&scrubbed), "{name}: backward seek differs from a fresh seek");
+            if matches!(name, "set_config" | "set_bounds") {
+                assert_ne!(buffer_bits(&fresh), buffer_bits(&untouched), "{name}: vacuous, the pre-roll did not change");
+            }
         }
     }
 
@@ -2874,7 +2967,7 @@ mod tests {
         stepped.seek(0.8);
         stepped.seek(0.9);
 
-        assert!(fresh.pool.iter().any(|p| p.entered), "test is vacuous: nothing entered");
+        assert!(fresh.live.pool.iter().any(|p| p.entered), "test is vacuous: nothing entered");
         assert!(fresh.particle_count() < 12, "test is vacuous: nothing was culled");
         assert_survivors_obey_the_cull_rule(&fresh, 0.0, 200.0, 200.0);
         assert_eq!(xy(&fresh), xy(&rewound));

@@ -201,6 +201,8 @@ The state at the end of the pre-roll depends only on the config, the seed,
 and the bounds, so `seek` keeps it, and a replay that starts over (a
 backward scrub, a seek after a live call) resumes from it rather than
 re-running the pre-roll. `set_config` and a change of bounds drop it.
+`set_config` reserves its memory when the track has a pre-roll, so `seek`
+itself never allocates and never grows wasm memory.
 With no pre-roll, a trigger authored at t=0 fires at the reset and `seek(0)`
 returns its burst unstepped; with any pre-roll it fires in the step that
 ends at t=0 and has been stepped once by `seek(0)`, like every other grid

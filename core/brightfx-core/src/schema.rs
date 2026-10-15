@@ -180,12 +180,14 @@ pub const MAX_EMITTER_TRACK_DURATION: f32 = 600.0;
 /// generators (`brightfx-tracks`) clamp the same way the core does.
 pub const MAX_PREROLL: f32 = 60.0;
 
-/// `preroll` as the core reads it: `0..=MAX_PREROLL`, 0 if not finite.
+/// `preroll` as the core reads it: clamped into `0..=MAX_PREROLL`, so +inf
+/// (what serde reads from a JSON number past f32) is the longest pre-roll,
+/// as it is the longest `duration`. NaN is 0.
 pub fn sanitize_preroll(preroll: f32) -> f32 {
-    if preroll.is_finite() {
-        preroll.clamp(0.0, MAX_PREROLL)
-    } else {
+    if preroll.is_nan() {
         0.0
+    } else {
+        preroll.clamp(0.0, MAX_PREROLL)
     }
 }
 
@@ -358,17 +360,16 @@ impl ParticleFxConfig {
         clamp(&mut self.peak_alpha, 0.0, 1.0, "peakAlpha");
         clamp(&mut self.end_alpha, 0.0, 1.0, "endAlpha");
 
-        if let Some(track) = self.emitter_track.as_mut() {
-            clamp(&mut track.duration, 0.0, MAX_EMITTER_TRACK_DURATION, "emitterTrack.duration");
-        }
-
         if let Some(margin) = self.cull_margin.as_mut() {
             clamp(margin, 0.0, MAX_CULL_MARGIN, "cullMargin");
         }
 
-        // Not through `clamp`: a NaN survives `f32::clamp` and the equality
-        // test there, and a pre-roll must be a real number of steps.
+        // Last of the `clamp` calls: the closure holds `changed` until then.
         if let Some(track) = self.emitter_track.as_mut() {
+            clamp(&mut track.duration, 0.0, MAX_EMITTER_TRACK_DURATION, "emitterTrack.duration");
+            // Not through `clamp`: a NaN survives `f32::clamp` and the
+            // equality test there, and a pre-roll must be a real number of
+            // steps.
             let preroll = sanitize_preroll(track.preroll);
             if preroll.to_bits() != track.preroll.to_bits() {
                 track.preroll = preroll;
@@ -847,8 +848,16 @@ mod tests {
     }
 
     #[test]
-    fn a_negative_or_non_finite_preroll_becomes_zero_and_is_reported() {
-        for bad in [-1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+    fn an_infinite_preroll_is_the_longest_and_is_reported() {
+        let mut config = tracked(f32::INFINITY);
+        let changed = config.clamp_to_bounds();
+        assert_eq!(config.emitter_track.unwrap().preroll, MAX_PREROLL);
+        assert!(changed.contains(&"emitterTrack.preroll"));
+    }
+
+    #[test]
+    fn a_negative_or_nan_preroll_becomes_zero_and_is_reported() {
+        for bad in [-1.0, f32::NAN, f32::NEG_INFINITY] {
             let mut config = tracked(bad);
             let changed = config.clamp_to_bounds();
             assert_eq!(config.emitter_track.unwrap().preroll, 0.0, "preroll {bad}");

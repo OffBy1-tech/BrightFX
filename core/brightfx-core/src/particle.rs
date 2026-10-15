@@ -40,10 +40,22 @@ pub(crate) struct Particle {
     pub entered: bool,
 }
 
-#[derive(Clone)]
 pub(crate) struct ParticlePool {
     particles: VecDeque<Particle>,
     capacity: usize,
+}
+
+/// By hand, for `clone_from`: the derived one would replace the deque
+/// with a fresh allocation, where this copies into the one already there.
+impl Clone for ParticlePool {
+    fn clone(&self) -> Self {
+        Self { particles: self.particles.clone(), capacity: self.capacity }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.particles.clone_from(&source.particles);
+        self.capacity = source.capacity;
+    }
 }
 
 impl ParticlePool {
@@ -109,6 +121,17 @@ mod tests {
             turbulence_seed: 0.0,
             entered: false,
         }
+    }
+
+    #[test]
+    fn clone_from_copies_into_the_existing_allocation() {
+        let mut target = ParticlePool::new(MAX_PARTICLES);
+        let mut source = ParticlePool::new(3);
+        source.spawn(marker(0.0));
+        source.spawn(marker(1.0));
+        target.clone_from(&source);
+        assert_eq!(target.iter().map(|p| p.x).collect::<Vec<_>>(), [0.0, 1.0]);
+        assert!(target.particles.capacity() >= MAX_PARTICLES, "the deque was reallocated");
     }
 
     #[test]
