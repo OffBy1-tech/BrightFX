@@ -177,11 +177,11 @@ is culled early, if it had not entered yet. A particle that crosses the whole
 rectangle in a single step lands on the far side moving outward, so it is
 culled too. A particle whose position is not finite is always culled.
 
-`set_bounds` takes logical px and returns an envelope like `set_viewport`. A
-non-finite or non-positive size (a container measured before layout, or an
-`undefined` that wasm-bindgen turned into NaN) is rejected with a message and
-leaves the bounds as they were, so it cannot silently turn culling off; to
-stop culling, set `cullMargin` to `null`. A C host without a viewport calls
+`set_bounds` takes logical px. A non-finite or non-positive size (a container
+measured before layout, or an `undefined` that wasm-bindgen turned into NaN)
+is rejected with a message (`Err` from `Simulation::set_bounds`, an error
+envelope through the ABI) and leaves the bounds as they were, so it cannot
+silently turn culling off; to stop culling, set `cullMargin` to `null`. A C host without a viewport calls
 `bfx_set_bounds` and frees its envelope with `bfx_string_free`. Changing the
 bounds, or `set_config` with any config, also culls the live pool at once, by
 the same rule, and permanently: growing the bounds or restoring a larger

@@ -137,7 +137,8 @@ uint32_t bfx_particle_floats(void);
 /**
  * Whether a panic has poisoned this simulation. A poisoned simulation is
  * inert: every operation is a no-op, `bfx_particle_count` reports 0, and
- * `bfx_set_config` returns an error envelope. Recover by freeing the
+ * every call that returns an envelope (`bfx_set_config`, `bfx_set_bounds`,
+ * `bfx_set_viewport`) returns an error one. Recover by freeing the
  * handle and creating a new one. Returns `false` for a NULL handle.
  *
  * # Safety

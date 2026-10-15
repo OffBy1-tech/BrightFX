@@ -185,7 +185,8 @@ pub extern "C" fn bfx_particle_floats() -> u32 {
 
 /// Whether a panic has poisoned this simulation. A poisoned simulation is
 /// inert: every operation is a no-op, `bfx_particle_count` reports 0, and
-/// `bfx_set_config` returns an error envelope. Recover by freeing the
+/// every call that returns an envelope (`bfx_set_config`, `bfx_set_bounds`,
+/// `bfx_set_viewport`) returns an error one. Recover by freeing the
 /// handle and creating a new one. Returns `false` for a NULL handle.
 ///
 /// # Safety
@@ -398,7 +399,8 @@ mod tests {
         assert_eq!(unsafe { bfx_particle_count(sim) }, live);
 
         // Shrinking the frame culls them at once, with no step in between.
-        envelope_from(unsafe { bfx_set_bounds(sim, 1.0, 1.0) });
+        let envelope = envelope_from(unsafe { bfx_set_bounds(sim, 1.0, 1.0) });
+        assert_eq!(envelope["ok"], true);
         assert_eq!(unsafe { bfx_particle_count(sim) }, 0);
         unsafe { bfx_simulation_free(sim) };
     }

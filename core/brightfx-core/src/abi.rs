@@ -342,10 +342,15 @@ impl AbiSimulation {
             Ok(clamped) => {
                 // The renderer clamps width, height and scale, so read back
                 // what it holds rather than the arguments.
+                // The clamp keeps both finite and positive, so this cannot
+                // fail today; if a clamp change ever broke that, report it
+                // rather than panic across the boundary.
                 if let Some(vp) = this.renderer.viewport() {
-                    this.sim
-                        .set_bounds(vp.width as f32 / vp.scale, vp.height as f32 / vp.scale)
-                        .expect("a clamped viewport is a finite, positive size");
+                    if let Err(message) =
+                        this.sim.set_bounds(vp.width as f32 / vp.scale, vp.height as f32 / vp.scale)
+                    {
+                        return err_envelope(&message);
+                    }
                 }
                 ok_envelope(&clamped)
             }

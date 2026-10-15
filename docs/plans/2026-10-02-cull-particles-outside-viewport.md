@@ -1,5 +1,7 @@
 # Cull Particles Outside the Viewport Implementation Plan
 
+> **Status:** shipped. Since changed in #38 (issue #30): `set_bounds` rejects a non-finite or non-positive size with an error envelope instead of clearing the bounds, and returns an envelope at every layer. The spec notes it; where they differ, the spec and the code win.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** An opt-in `cullMargin` config field removes a particle once its center is more than the margin outside host-supplied bounds, so pools match what is on screen (issue #17).

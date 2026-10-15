@@ -35,35 +35,26 @@ internal static class Native
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] internal static extern uint bfx_frame_width(IntPtr sim);
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)] internal static extern uint bfx_frame_height(IntPtr sim);
 
-    internal static string SetViewport(IntPtr sim, uint width, uint height, float scale)
+    /// Copies an envelope out and releases it. Rust owns the buffer, so it
+    /// must be freed with bfx_string_free rather than Marshal.FreeHGlobal.
+    private static string TakeEnvelope(IntPtr result, string function)
     {
-        IntPtr result = bfx_set_viewport(sim, width, height, scale);
-        if (result == IntPtr.Zero) throw new Exception("bfx_set_viewport returned NULL");
+        if (result == IntPtr.Zero) throw new Exception($"{function} returned NULL");
         try { return Marshal.PtrToStringUTF8(result) ?? ""; }
         finally { bfx_string_free(result); }
     }
+
+    internal static string SetViewport(IntPtr sim, uint width, uint height, float scale)
+        => TakeEnvelope(bfx_set_viewport(sim, width, height, scale), "bfx_set_viewport");
 
     internal static string SetBounds(IntPtr sim, float width, float height)
-    {
-        IntPtr result = bfx_set_bounds(sim, width, height);
-        if (result == IntPtr.Zero) throw new Exception("bfx_set_bounds returned NULL");
-        try { return Marshal.PtrToStringUTF8(result) ?? ""; }
-        finally { bfx_string_free(result); }
-    }
+        => TakeEnvelope(bfx_set_bounds(sim, width, height), "bfx_set_bounds");
 
-    /// Calls bfx_set_config with a UTF-8 string and returns the envelope,
-    /// releasing the Rust-owned string. Rust owns the returned buffer, so it
-    /// must be freed with bfx_string_free rather than Marshal.FreeHGlobal.
+    /// Calls bfx_set_config with a UTF-8 string and returns the envelope.
     internal static string SetConfig(IntPtr sim, string json)
     {
         IntPtr utf8 = Marshal.StringToCoTaskMemUTF8(json);
-        try
-        {
-            IntPtr result = bfx_set_config(sim, utf8);
-            if (result == IntPtr.Zero) throw new Exception("bfx_set_config returned NULL");
-            try { return Marshal.PtrToStringUTF8(result) ?? ""; }
-            finally { bfx_string_free(result); }
-        }
+        try { return TakeEnvelope(bfx_set_config(sim, utf8), "bfx_set_config"); }
         finally { Marshal.FreeCoTaskMem(utf8); }
     }
 

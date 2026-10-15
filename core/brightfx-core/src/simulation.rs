@@ -2742,11 +2742,20 @@ mod tests {
         let mut sim = Simulation::new(track_config(), 5);
         sim.set_bounds(100.0, 100.0).unwrap();
         sim.seek(0.5);
-        let before = sim.particle_count();
         assert!(sim.baked.is_some());
         assert!(sim.set_bounds(0.0, 0.0).is_err());
         assert!(sim.baked.is_some(), "a rejected size cleared the cursor");
-        assert_eq!(sim.particle_count(), before);
+
+        // A runner outside a 100-wide frame would be culled if the
+        // rejected size reached the pool in any form.
+        let mut sim = one_runner(Some(0.0));
+        sim.set_bounds(200.0, 100.0).unwrap();
+        advance_steps(&mut sim, 5);
+        assert!(sim.buffer()[0].x > 100.0, "test is vacuous: the runner is inside a 100-wide frame");
+        for (w, h) in [(0.0, 100.0), (100.0, f32::NAN)] {
+            assert!(sim.set_bounds(w, h).is_err());
+            assert_eq!(sim.particle_count(), 1, "({w}, {h}) culled the pool");
+        }
     }
 
     #[test]

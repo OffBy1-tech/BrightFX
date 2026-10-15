@@ -61,7 +61,8 @@ export interface BrightFXProps {
  *  `viewport` allocates a frame (frame mode). `bounds` is for a host that
  *  draws its own sprites: it gives the simulation a size for `cullMargin`
  *  without allocating a frame. A viewport sets the bounds itself, so
- *  `bounds` is ignored when a `viewport` is given.
+ *  `bounds` is ignored when a `viewport` is given. A size the simulation
+ *  rejects (0 or NaN, say) cancels the render with its message.
  *
  *  Returns null until a simulation built for exactly this `viewport` and
  *  `bounds` has loaded. When either changes (a sprite/frame mode switch, or a new
@@ -85,6 +86,11 @@ export function useBrightFX(
     boundsHeight: number;
   } | null>(null);
   const effectJson = useMemo(() => JSON.stringify(effect), [effect]);
+  // Presence is tracked apart from size: a size of 0 or NaN (a container
+  // measured before layout) must reach the simulation and be rejected,
+  // not be mistaken for "no bounds" and leave culling silently off.
+  const hasViewport = viewport != null;
+  const hasBounds = bounds != null;
   const viewportWidth = viewport?.width ?? 0;
   const viewportHeight = viewport?.height ?? 0;
   const boundsWidth = bounds?.width ?? 0;
@@ -118,10 +124,10 @@ export function useBrightFX(
           console.warn(`BrightFX clamped ${result.clamped.length} value(s): ${result.clamped.join(", ")}`);
         }
         for (const warning of result.warnings ?? []) console.warn(`BrightFX: ${warning}`);
-        if (viewportWidth > 0 && viewportHeight > 0) {
+        if (hasViewport) {
           const v = created.setViewport(viewportWidth, viewportHeight, 1);
           if (!v.ok) throw new Error(`BrightFX viewport rejected: ${v.error}`);
-        } else if (boundsWidth > 0 && boundsHeight > 0) {
+        } else if (hasBounds) {
           // Only without a viewport: a viewport already set the bounds, and
           // `setBounds` after it would replace them with a different size.
           const b = created.setBounds(boundsWidth, boundsHeight);
@@ -138,7 +144,7 @@ export function useBrightFX(
       created?.dispose();
       setLoaded(null);
     };
-  }, [effectJson, seed, wasmSrc, viewportWidth, viewportHeight, boundsWidth, boundsHeight]);
+  }, [effectJson, seed, wasmSrc, hasViewport, hasBounds, viewportWidth, viewportHeight, boundsWidth, boundsHeight]);
 
   return loaded &&
     loaded.width === viewportWidth &&
