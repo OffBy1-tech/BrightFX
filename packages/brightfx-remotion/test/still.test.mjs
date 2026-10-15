@@ -200,3 +200,18 @@ test("frame mode leaves the bounds to setViewport", () => {
   assert.ok(probeShown(png, "raster"), "the frame never rasterized, so this proves nothing");
   assert.ok(!probeShown(png, "bounds"), "setBounds ran in frame mode, where setViewport already sets the bounds");
 });
+
+test("a rejected bounds size is passed on, warned about, and does not cancel the render", () => {
+  // A host measuring a container before layout passes 0. It must reach
+  // setBounds (not be mistaken for "no bounds") and must not abort the
+  // render: the next layout pass brings the real size.
+  const png = still("ZeroBoundsTest");
+  assert.ok(probeShown(png, "bounds"), "setBounds never ran, so the bad size was skipped silently");
+  assert.ok(probeShown(png, "loaded"), "the hook never returned a simulation");
+});
+
+test("bounds ignored beside a viewport cannot keep the hook from loading", () => {
+  const png = still("ViewportNaNBoundsTest");
+  assert.ok(probeShown(png, "loaded"), "a NaN bounds next to a viewport left the hook returning null");
+  assert.ok(!probeShown(png, "bounds"), "setBounds ran although a viewport was given");
+});

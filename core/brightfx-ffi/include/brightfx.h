@@ -9,6 +9,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#if defined(__GNUC__) || defined(__clang__)
+#define BFX_MUST_USE __attribute__((warn_unused_result))
+#else
+#define BFX_MUST_USE
+#endif
 
 /**
  * Opaque handle. Single-threaded: drive one handle from one thread.
@@ -43,7 +48,7 @@ void bfx_simulation_free(struct BfxSimulation *sim);
  * `sim` must be a valid handle or NULL; `json` must be a NUL-terminated
  * string or NULL.
  */
-char *bfx_set_config(struct BfxSimulation *sim, const char *json);
+BFX_MUST_USE char *bfx_set_config(struct BfxSimulation *sim, const char *json);
 
 /**
  * Releases a string returned by `bfx_set_config`, `bfx_set_bounds`, or
@@ -76,7 +81,7 @@ void bfx_set_emitter(struct BfxSimulation *sim, float x, float y, float vx, floa
  * # Safety
  * `sim` must be a valid handle or NULL.
  */
-char *bfx_set_bounds(struct BfxSimulation *sim, float width, float height);
+BFX_MUST_USE char *bfx_set_bounds(struct BfxSimulation *sim, float width, float height);
 
 /**
  * # Safety
@@ -155,7 +160,11 @@ bool bfx_is_poisoned(const struct BfxSimulation *sim);
  * # Safety
  * `sim` must be a valid handle or NULL.
  */
-char *bfx_set_viewport(struct BfxSimulation *sim, uint32_t width, uint32_t height, float scale);
+BFX_MUST_USE
+char *bfx_set_viewport(struct BfxSimulation *sim,
+                       uint32_t width,
+                       uint32_t height,
+                       float scale);
 
 /**
  * Rasterizes the current particle buffer into the frame. A no-op until

@@ -61,8 +61,10 @@ export interface BrightFXProps {
  *  `viewport` allocates a frame (frame mode). `bounds` is for a host that
  *  draws its own sprites: it gives the simulation a size for `cullMargin`
  *  without allocating a frame. A viewport sets the bounds itself, so
- *  `bounds` is ignored when a `viewport` is given. A size the simulation
- *  rejects (0 or NaN, say) cancels the render with its message.
+ *  `bounds` is ignored when a `viewport` is given. A viewport the
+ *  simulation rejects (0 or NaN, say) cancels the render with its message;
+ *  rejected `bounds` only warn, and leave culling off until a valid size
+ *  arrives, since they are usually a container measured before layout.
  *
  *  Returns null until a simulation built for exactly this `viewport` and
  *  `bounds` has loaded. When either changes (a sprite/frame mode switch, or a new
@@ -80,6 +82,8 @@ export function useBrightFX(
 ): Simulation | null {
   const [loaded, setLoaded] = useState<{
     sim: Simulation;
+    hasViewport: boolean;
+    usesBounds: boolean;
     width: number;
     height: number;
     boundsWidth: number;
@@ -88,13 +92,14 @@ export function useBrightFX(
   const effectJson = useMemo(() => JSON.stringify(effect), [effect]);
   // Presence is tracked apart from size: a size of 0 or NaN (a container
   // measured before layout) must reach the simulation and be rejected,
-  // not be mistaken for "no bounds" and leave culling silently off.
+  // not be mistaken for "no bounds". Bounds beside a viewport are ignored,
+  // so they are zeroed here and cannot rebuild or block the simulation.
   const hasViewport = viewport != null;
-  const hasBounds = bounds != null;
+  const usesBounds = !hasViewport && bounds != null;
   const viewportWidth = viewport?.width ?? 0;
   const viewportHeight = viewport?.height ?? 0;
-  const boundsWidth = bounds?.width ?? 0;
-  const boundsHeight = bounds?.height ?? 0;
+  const boundsWidth = usesBounds ? bounds.width : 0;
+  const boundsHeight = usesBounds ? bounds.height : 0;
 
   useEffect(() => {
     const handle = delayRender("BrightFX: loading wasm and config");
@@ -127,13 +132,24 @@ export function useBrightFX(
         if (hasViewport) {
           const v = created.setViewport(viewportWidth, viewportHeight, 1);
           if (!v.ok) throw new Error(`BrightFX viewport rejected: ${v.error}`);
-        } else if (hasBounds) {
+        } else if (usesBounds) {
           // Only without a viewport: a viewport already set the bounds, and
           // `setBounds` after it would replace them with a different size.
+          // A rejected size is a warning, not a cancelled render: it is
+          // usually a container measured before layout, and the real size
+          // rebuilds this simulation when it arrives.
           const b = created.setBounds(boundsWidth, boundsHeight);
-          if (!b.ok) throw new Error(`BrightFX bounds rejected: ${b.error}`);
+          if (!b.ok) console.warn(`BrightFX bounds rejected, so nothing is culled: ${b.error}`);
         }
-        setLoaded({ sim: created, width: viewportWidth, height: viewportHeight, boundsWidth, boundsHeight });
+        setLoaded({
+          sim: created,
+          hasViewport,
+          usesBounds,
+          width: viewportWidth,
+          height: viewportHeight,
+          boundsWidth,
+          boundsHeight,
+        });
         release();
       })
       .catch((error: unknown) => cancelRender(error));
@@ -144,13 +160,17 @@ export function useBrightFX(
       created?.dispose();
       setLoaded(null);
     };
-  }, [effectJson, seed, wasmSrc, hasViewport, hasBounds, viewportWidth, viewportHeight, boundsWidth, boundsHeight]);
+  }, [effectJson, seed, wasmSrc, hasViewport, usesBounds, viewportWidth, viewportHeight, boundsWidth, boundsHeight]);
 
+  // `Object.is`, not `===`: a NaN size must still match the simulation
+  // built for it, as React's dependency check already treats it.
   return loaded &&
-    loaded.width === viewportWidth &&
-    loaded.height === viewportHeight &&
-    loaded.boundsWidth === boundsWidth &&
-    loaded.boundsHeight === boundsHeight
+    loaded.hasViewport === hasViewport &&
+    loaded.usesBounds === usesBounds &&
+    Object.is(loaded.width, viewportWidth) &&
+    Object.is(loaded.height, viewportHeight) &&
+    Object.is(loaded.boundsWidth, boundsWidth) &&
+    Object.is(loaded.boundsHeight, boundsHeight)
     ? loaded.sim
     : null;
 }

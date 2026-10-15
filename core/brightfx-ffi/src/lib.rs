@@ -39,6 +39,7 @@ pub unsafe extern "C" fn bfx_simulation_free(sim: *mut BfxSimulation) {
 /// `sim` must be a valid handle or NULL; `json` must be a NUL-terminated
 /// string or NULL.
 #[no_mangle]
+#[must_use]
 pub unsafe extern "C" fn bfx_set_config(
     sim: *mut BfxSimulation,
     json: *const c_char,
@@ -98,6 +99,7 @@ pub unsafe extern "C" fn bfx_set_emitter(
 /// # Safety
 /// `sim` must be a valid handle or NULL.
 #[no_mangle]
+#[must_use]
 pub unsafe extern "C" fn bfx_set_bounds(
     sim: *mut BfxSimulation,
     width: f32,
@@ -207,6 +209,7 @@ pub unsafe extern "C" fn bfx_is_poisoned(sim: *const BfxSimulation) -> bool {
 /// # Safety
 /// `sim` must be a valid handle or NULL.
 #[no_mangle]
+#[must_use]
 pub unsafe extern "C" fn bfx_set_viewport(
     sim: *mut BfxSimulation,
     width: u32,

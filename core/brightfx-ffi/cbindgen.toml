@@ -6,6 +6,18 @@ documentation = true
 documentation_style = "doxy"
 cpp_compat = true
 
+# An envelope a caller drops is leaked, so compilers that can warn about an
+# unused result do. MSVC has no such attribute; there the macro is empty.
+after_includes = """
+#if defined(__GNUC__) || defined(__clang__)
+#define BFX_MUST_USE __attribute__((warn_unused_result))
+#else
+#define BFX_MUST_USE
+#endif"""
+
+[fn]
+must_use = "BFX_MUST_USE"
+
 [export]
 include = ["BfxSimulation"]
 

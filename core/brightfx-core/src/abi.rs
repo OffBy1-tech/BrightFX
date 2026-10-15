@@ -307,8 +307,9 @@ impl AbiSimulation {
     /// `set_config`/`set_bounds`/`set_viewport` that culls live particles
     /// at once (a new `cullMargin`, or a changed size). The
     /// address itself is stable for the life of the simulation (the buffer is
-    /// preallocated), but hosts on WASM must still re-read it after
-    /// `set_config`, which can grow linear memory and detach existing views.
+    /// preallocated), but hosts on WASM must still re-read it after any call
+    /// that returns an envelope (`set_config`, `set_bounds`, `set_viewport`):
+    /// building the envelope can grow linear memory and detach existing views.
     pub fn buffer_ptr(&self) -> *const f32 {
         self.sim.buffer().as_ptr() as *const f32
     }
@@ -328,7 +329,8 @@ impl AbiSimulation {
     /// `scale` device pixels per logical unit. Returns an envelope like
     /// `set_config`: `{"ok":true,"clamped":[...],"warnings":[]}` with any of
     /// `viewport.width`, `viewport.height`, `viewport.scale`, or
-    /// `{"ok":false,"error":"..."}` for a zero dimension.
+    /// `{"ok":false,"error":"..."}` for a zero dimension or a non-finite
+    /// scale.
     ///
     /// Reallocates the frame, so on WASM a host must re-read `frame_ptr`
     /// afterwards, as with `set_config` and the particle buffer.
@@ -780,10 +782,15 @@ mod tests {
         sim.trigger_burst();
         assert_eq!(sim.sim.particle_count(), pool_before, "poisoned sim still mutated");
 
-        // And config loads report the condition instead of silently succeeding.
+        // And every envelope call reports the condition instead of silently
+        // succeeding.
         let value = parse(&sim.set_config(&valid_config_json()));
         assert_eq!(value["ok"], false);
         assert!(value["error"].as_str().unwrap().contains("poisoned"));
+        let value = parse(&sim.set_bounds(100.0, 100.0));
+        assert_eq!(value["ok"], false);
+        assert!(value["error"].as_str().unwrap().contains("poisoned"));
+        assert_eq!(sim.sim.bounds(), None, "a poisoned simulation took bounds");
     }
 
     #[test]

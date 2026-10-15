@@ -232,8 +232,8 @@ export class Simulation {
    *  itself, as `width / scale` by `height / scale`). Changing it makes the
    *  next `seek` replay from the start of the track (its `preroll` before
    *  t=0). A non-finite or non-positive size (including `undefined`, which
-   *  wasm-bindgen turns into NaN, as from a container measured before
-   *  layout) returns `{ok:false, error}` and leaves the bounds as they were.
+   *  release wasm-bindgen glue turns into NaN, as from a container measured
+   *  before layout; a `--dev` build throws on it instead) returns `{ok:false, error}` and leaves the bounds as they were.
    *  To stop culling, set `cullMargin` to `null`. When a host calls both
    *  `setViewport` and `setBounds`, the last call wins. */
   setBounds(width: number, height: number): ConfigResult {
