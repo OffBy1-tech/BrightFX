@@ -45,17 +45,15 @@ pub(crate) fn leg_count(duration: f32, leg: f32) -> usize {
 /// track carries it, so `seek(0)` returns a pool that has already run that
 /// long. The parity alternation is anchored at t=0: the keyframes at
 /// t >= 0 are the same with or without a pre-roll. `preroll` is clamped as
-/// the core clamps it (`0..=MAX_PREROLL`, non-finite is 0).
+/// the core clamps it (`0..=MAX_PREROLL`, NaN is 0).
 ///
 /// `period` is floored at [`MIN_SWEEP_PERIOD`] and capped at `f32::MAX`,
 /// and `duration` is sanitized into `0..=MAX_EMITTER_TRACK_DURATION` (a
 /// non-finite duration becomes 0), so the result always loads unclamped.
 pub fn sweep_track(a: (f32, f32), b: (f32, f32), period: f32, duration: f32, preroll: f32) -> EmitterTrack {
-    // Capped too: an infinite period (a distance over a zero speed) would
-    // put the pre-roll keyframe at `-1 * inf`, a time JSON cannot carry.
-    // At `f32::MAX` the emitter just sits at `a`, as a very slow sweep would.
-    #[allow(clippy::manual_clamp)] // `clamp` would keep a NaN period; `max` floors it
-    let half = period.max(MIN_SWEEP_PERIOD).min(f32::MAX) / 2.0;
+    // `max` rather than `clamp`, which would keep a NaN period. The
+    // infinite one is `legged_track`'s to cap.
+    let half = period.max(MIN_SWEEP_PERIOD) / 2.0;
     let duration = if duration.is_finite() {
         duration.clamp(0.0, MAX_EMITTER_TRACK_DURATION)
     } else {
@@ -69,7 +67,8 @@ pub fn sweep_track(a: (f32, f32), b: (f32, f32), period: f32, duration: f32, pre
 /// `sweep_track` and the presets' scatter path lay down. `at(j, i)` places
 /// keyframe `j`, counted from the track's first keyframe, which sits at leg
 /// `i` from t=0 (negative inside the pre-roll). `preroll` is sanitized as
-/// the core sanitizes it; `leg` and `duration` are the caller's to bound.
+/// the core sanitizes it, and `leg` is capped at `f32::MAX`; its floor and
+/// `duration` are the caller's to bound.
 pub(crate) fn legged_track(
     leg: f32,
     duration: f32,
@@ -77,6 +76,11 @@ pub(crate) fn legged_track(
     mut at: impl FnMut(usize, i64) -> (f32, f32),
 ) -> EmitterTrack {
     let preroll = sanitize_preroll(preroll);
+    // An infinite leg (a distance over a zero speed) would put the pre-roll
+    // keyframe at `-1 * inf`, a time JSON cannot carry, and the t=0 one at
+    // `0 * inf`, NaN. At `f32::MAX` the emitter just sits at the first
+    // point, as a very slow path would.
+    let leg = leg.min(f32::MAX);
 
     // Whole legs before t=0: enough to cover the pre-roll, plus one, so
     // the path reaches past `-preroll` instead of parking the emitter at
@@ -196,9 +200,22 @@ mod tests {
     fn a_bad_preroll_is_clamped_like_the_core_clamps_it() {
         assert_eq!(sweep_track((0.0, 0.0), (10.0, 0.0), 1.0, 2.0, -3.0).preroll, 0.0);
         assert_eq!(sweep_track((0.0, 0.0), (10.0, 0.0), 1.0, 2.0, f32::NAN).preroll, 0.0);
-        let capped = sweep_track((0.0, 0.0), (10.0, 0.0), 1.0, 2.0, 1e9);
-        assert_eq!(capped.preroll, MAX_PREROLL);
-        assert!(capped.keyframes[0].time <= -MAX_PREROLL);
+        for long in [1e9, f32::INFINITY] {
+            let capped = sweep_track((0.0, 0.0), (10.0, 0.0), 1.0, 2.0, long);
+            assert_eq!(capped.preroll, MAX_PREROLL, "preroll {long}");
+            assert!(capped.keyframes[0].time <= -MAX_PREROLL, "preroll {long}");
+        }
+    }
+
+    #[test]
+    fn an_infinite_leg_lays_down_finite_times() {
+        // The cap is in `legged_track`, so it covers every caller: the
+        // presets' scatter path reaches it with no cap of its own.
+        let track = legged_track(f32::INFINITY, 2.0, 1.0, |j, _| (j as f32, 0.0));
+        let times: Vec<f32> = track.keyframes.iter().map(|k| k.time).collect();
+        assert!(times.iter().all(|t| t.is_finite()), "{times:?}");
+        assert!(times.windows(2).all(|w| w[0] <= w[1]), "{times:?}");
+        assert_eq!(times[0], -f32::MAX);
     }
 
     #[test]
