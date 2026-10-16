@@ -85,10 +85,12 @@ export type EffectConfig = {
    *  what is drawn around the center: half a sprite's width and height, or
    *  half its diagonal if it rotates (glow and size, in frame mode).
    *  Otherwise a particle is removed while part of it is still on screen.
-   *  A preset's margin assumes a sprite size it cannot see; to raise it,
-   *  set `Math.max(config.cullMargin ?? 0, needed)` on the config after any
-   *  `fitTrack`, which may already have raised it further. See "Culling
-   *  bounds" in the `brightfx-remotion` README. */
+   *  A preset's margin assumes a sprite size it cannot see. To raise it,
+   *  set `Math.max(config.cullMargin, needed)` on the config after any
+   *  `fitTrack` (which may already have raised it further), and only when
+   *  it has a margin: setting one where it is `null` turns culling on for
+   *  a preset not tuned for it. See "Culling bounds" in the
+   *  `brightfx-remotion` README. */
   cullMargin?: number | null;
 } & Record<string, unknown>;
 

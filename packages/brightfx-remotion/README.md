@@ -98,12 +98,16 @@ glyph: half its width and height, or half its diagonal if it rotates. (In
 frame mode the core draws the particle, and a large `size` or glow reaches
 past the center the same way.) A preset's margin assumes a glyph size it
 cannot see; `flight-arc`'s 120 covers rotating square glyphs up to about
-170 px. For larger glyphs, raise it, and never lower it:
+170 px. For larger glyphs, raise it, never lower it, and leave a `null`
+margin alone (that preset is not tuned for culling, and setting one turns it
+on):
 
 ```tsx
 // At module scope (or in useMemo): a new object each frame would make
 // the component re-serialize the whole effect every frame.
-const throws = { ...flightArc, cullMargin: Math.max(flightArc.cullMargin ?? 0, 160) };
+const raiseCullMargin = (effect, needed) =>
+  effect.cullMargin == null ? effect : { ...effect, cullMargin: Math.max(effect.cullMargin, needed) };
+const throws = raiseCullMargin(flightArc, 160);
 
 <BrightFX effect={throws} mode="sprite" render={drawGlyph} />
 ```

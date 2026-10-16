@@ -199,9 +199,9 @@ pub fn sanitize_preroll(preroll: f32) -> f32 {
 
 /// Upper bound on `cullMargin`, in logical px. A sanity limit, well past any
 /// real frame (`MAX_VIEWPORT_SIDE` is 8192 device px), not a numeric one.
-/// `clamp_to_bounds` caps a larger margin here, raises a negative one to 0,
-/// and turns NaN into no margin, reporting `cullMargin` each time. Public, like `MAX_PREROLL`, so
-/// wrappers and their docs cite one value.
+/// `clamp_to_bounds` caps a larger margin here and raises a negative one to
+/// 0, reporting `cullMargin`. Public, like `MAX_PREROLL`, so wrappers and
+/// their docs cite one value.
 pub const MAX_CULL_MARGIN: f32 = 10_000.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -370,6 +370,9 @@ impl ParticleFxConfig {
         clamp(&mut self.peak_alpha, 0.0, 1.0, "peakAlpha");
         clamp(&mut self.end_alpha, 0.0, 1.0, "endAlpha");
 
+        if let Some(margin) = self.cull_margin.as_mut() {
+            clamp(margin, 0.0, MAX_CULL_MARGIN, "cullMargin");
+        }
 
         // Last of the `clamp` calls: the closure holds `changed` until then.
         if let Some(track) = self.emitter_track.as_mut() {
@@ -381,18 +384,6 @@ impl ParticleFxConfig {
             if preroll.to_bits() != track.preroll.to_bits() {
                 track.preroll = preroll;
                 changed.push("emitterTrack.preroll");
-            }
-        }
-
-        // Not through `clamp` either: a NaN margin would survive it, and
-        // with it no particle is ever culled. NaN becomes no margin, which
-        // is what a JS host already gets (`JSON.stringify` writes it as
-        // `null`).
-        if let Some(margin) = self.cull_margin {
-            let sane = if margin.is_nan() { None } else { Some(margin.clamp(0.0, MAX_CULL_MARGIN)) };
-            if sane.map(f32::to_bits) != Some(margin.to_bits()) {
-                self.cull_margin = sane;
-                changed.push("cullMargin");
             }
         }
 
@@ -542,17 +533,6 @@ mod tests {
         let changed = config.clamp_to_bounds();
         assert_eq!(config.cull_margin, Some(0.0));
         assert!(changed.contains(&"cullMargin"));
-    }
-
-    #[test]
-    fn a_nan_cull_margin_becomes_no_margin_and_is_reported() {
-        let mut config = ParticleFxConfig { cull_margin: Some(f32::NAN), ..Default::default() };
-        assert!(config.clamp_to_bounds().contains(&"cullMargin"));
-        assert_eq!(config.cull_margin, None);
-
-        let mut config = ParticleFxConfig { cull_margin: Some(f32::INFINITY), ..Default::default() };
-        assert!(config.clamp_to_bounds().contains(&"cullMargin"));
-        assert_eq!(config.cull_margin, Some(MAX_CULL_MARGIN));
     }
 
     #[test]

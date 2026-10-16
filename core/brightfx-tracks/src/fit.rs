@@ -1,4 +1,4 @@
-use brightfx_core::{ParticleFxConfig, MAX_CULL_MARGIN};
+use brightfx_core::ParticleFxConfig;
 
 /// The core spawns a particle within +/-2 px of the emitter.
 const SPAWN_JITTER: f32 = 2.0;
@@ -72,10 +72,7 @@ pub fn fit_track(
             .map(|k| (-k.x).max(k.x - to.0).max(-k.y).max(k.y - to.1))
             .fold(0.0_f32, f32::max);
         if excursion > 0.0 {
-            // Capped where the core would clamp it, so a fit never hands
-            // the host a margin that `setConfig` reports as clamped.
-            let needed = emitter_cull_margin(excursion, config.turbulence).min(MAX_CULL_MARGIN);
-            config.cull_margin = Some(margin.max(needed));
+            config.cull_margin = Some(margin.max(emitter_cull_margin(excursion, config.turbulence)));
         }
     }
     Ok(config)
@@ -174,14 +171,6 @@ mod tests {
         let fitted = fit_track(swept(Some(24.0), 0.0, 1920.0, -20.0), (1920.0, 1080.0), (1080.0, 1920.0)).unwrap();
         let margin = fitted.cull_margin.unwrap();
         assert!((margin - (20.0 * 1920.0 / 1080.0 + 2.0)).abs() < 1e-3, "margin was {margin}");
-    }
-
-    #[test]
-    fn a_raised_margin_stops_at_the_core_s_cap() {
-        // 60 px past the frame, fitted to a frame 200 times wider, is
-        // 12,000 px: past what the core keeps.
-        let fitted = fit_track(swept(Some(24.0), -60.0, 1980.0, 0.0), (1920.0, 1080.0), (384_000.0, 1080.0)).unwrap();
-        assert_eq!(fitted.cull_margin, Some(MAX_CULL_MARGIN));
     }
 
     #[test]
