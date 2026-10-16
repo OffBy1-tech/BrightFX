@@ -180,6 +180,12 @@ pub const MAX_EMITTER_TRACK_DURATION: f32 = 600.0;
 /// generators (`brightfx-tracks`) clamp the same way the core does.
 pub const MAX_PREROLL: f32 = 60.0;
 
+/// `value` clamped into `min..=max`, with a NaN (which `f32::clamp` passes
+/// through) read as `default`: as if the field had been left out.
+pub(crate) fn clamp_or_default(value: f32, min: f32, max: f32, default: f32) -> f32 {
+    if value.is_nan() { default.clamp(min, max) } else { value.clamp(min, max) }
+}
+
 /// `preroll` as the core reads it: clamped into `0..=MAX_PREROLL`, so +inf
 /// (what serde reads from a JSON number past f32) is the longest pre-roll,
 /// as it is the longest `duration`, and NaN is 0. Then snapped up to the
@@ -333,53 +339,63 @@ impl ParticleFxConfig {
     /// Clamps every numeric field with a documented valid range (per
     /// Mouseflare's original `fxEditor.ts` comments) into that range,
     /// tolerating out-of-range values from hand-edited JSON instead of
-    /// rejecting the whole config. Returns the field names that were
-    /// changed, so a host UI can surface a warning.
+    /// rejecting the whole config. A NaN is read as the field's default, as
+    /// if it had been left out: `ParticleFxConfig::default()`'s value, no
+    /// `cullMargin` (no culling, which is also what a JS host's NaN becomes,
+    /// as `JSON.stringify` writes it as `null`), and 0 for a track's
+    /// `duration` and a colour stop's `offset`, as the simulation reads them.
+    /// Returns the field names that were changed, so a host UI can surface
+    /// a warning.
     pub fn clamp_to_bounds(&mut self) -> Vec<&'static str> {
         let mut changed = Vec::new();
-        let mut clamp = |value: &mut f32, min: f32, max: f32, name: &'static str| {
-            let clamped = value.clamp(min, max);
-            if clamped != *value {
+        // Before the closure below, which holds `changed` until its last use.
+        if self.cull_margin.is_some_and(f32::is_nan) {
+            self.cull_margin = None;
+            changed.push("cullMargin");
+        }
+        let d = Self::default();
+        let mut clamp = |value: &mut f32, min: f32, max: f32, default: f32, name: &'static str| {
+            let clamped = clamp_or_default(*value, min, max, default);
+            if clamped.to_bits() != value.to_bits() {
                 *value = clamped;
                 changed.push(name);
             }
         };
 
-        clamp(&mut self.emitter.spawn_rate_while_active, 0.0, 20.0, "emitter.spawnRateWhileActive");
-        clamp(&mut self.emitter.spawn_rate_idle, 0.0, 5.0, "emitter.spawnRateIdle");
-        clamp(&mut self.emitter.emission_angle, 0.0, 360.0, "emitter.emissionAngle");
-        clamp(&mut self.emitter.emission_spread, 0.0, 360.0, "emitter.emissionSpread");
-        clamp(&mut self.emitter.velocity_inheritance, 0.0, 1.0, "emitter.velocityInheritance");
-        clamp(&mut self.glow_radius, 0.0, 30.0, "glowRadius");
-        clamp(&mut self.initial_speed_min, 0.0, 15.0, "initialSpeedMin");
-        clamp(&mut self.initial_speed_max, 0.0, 15.0, "initialSpeedMax");
-        clamp(&mut self.gravity_x, -3.0, 3.0, "gravityX");
-        clamp(&mut self.gravity_y, -3.0, 3.0, "gravityY");
-        clamp(&mut self.drag, 0.85, 1.0, "drag");
-        clamp(&mut self.turbulence, 0.0, 5.0, "turbulence");
-        clamp(&mut self.vortex_attraction, -3.0, 3.0, "vortexAttraction");
-        clamp(&mut self.rotation_speed_min, -10.0, 10.0, "rotationSpeedMin");
-        clamp(&mut self.rotation_speed_max, -10.0, 10.0, "rotationSpeedMax");
-        clamp(&mut self.lifetime_min, 10.0, 300.0, "lifetimeMin");
-        clamp(&mut self.lifetime_max, 10.0, 300.0, "lifetimeMax");
-        clamp(&mut self.start_size, 1.0, 40.0, "startSize");
-        clamp(&mut self.peak_size, 1.0, 40.0, "peakSize");
-        clamp(&mut self.end_size, 0.0, 40.0, "endSize");
-        clamp(&mut self.rainbow_speed, 0.0, 10.0, "rainbowSpeed");
-        clamp(&mut self.start_alpha, 0.0, 1.0, "startAlpha");
-        clamp(&mut self.peak_alpha, 0.0, 1.0, "peakAlpha");
-        clamp(&mut self.end_alpha, 0.0, 1.0, "endAlpha");
+        clamp(&mut self.emitter.spawn_rate_while_active, 0.0, 20.0, d.emitter.spawn_rate_while_active, "emitter.spawnRateWhileActive");
+        clamp(&mut self.emitter.spawn_rate_idle, 0.0, 5.0, d.emitter.spawn_rate_idle, "emitter.spawnRateIdle");
+        clamp(&mut self.emitter.emission_angle, 0.0, 360.0, d.emitter.emission_angle, "emitter.emissionAngle");
+        clamp(&mut self.emitter.emission_spread, 0.0, 360.0, d.emitter.emission_spread, "emitter.emissionSpread");
+        clamp(&mut self.emitter.velocity_inheritance, 0.0, 1.0, d.emitter.velocity_inheritance, "emitter.velocityInheritance");
+        clamp(&mut self.glow_radius, 0.0, 30.0, d.glow_radius, "glowRadius");
+        clamp(&mut self.initial_speed_min, 0.0, 15.0, d.initial_speed_min, "initialSpeedMin");
+        clamp(&mut self.initial_speed_max, 0.0, 15.0, d.initial_speed_max, "initialSpeedMax");
+        clamp(&mut self.gravity_x, -3.0, 3.0, d.gravity_x, "gravityX");
+        clamp(&mut self.gravity_y, -3.0, 3.0, d.gravity_y, "gravityY");
+        clamp(&mut self.drag, 0.85, 1.0, d.drag, "drag");
+        clamp(&mut self.turbulence, 0.0, 5.0, d.turbulence, "turbulence");
+        clamp(&mut self.vortex_attraction, -3.0, 3.0, d.vortex_attraction, "vortexAttraction");
+        clamp(&mut self.rotation_speed_min, -10.0, 10.0, d.rotation_speed_min, "rotationSpeedMin");
+        clamp(&mut self.rotation_speed_max, -10.0, 10.0, d.rotation_speed_max, "rotationSpeedMax");
+        clamp(&mut self.lifetime_min, 10.0, 300.0, d.lifetime_min, "lifetimeMin");
+        clamp(&mut self.lifetime_max, 10.0, 300.0, d.lifetime_max, "lifetimeMax");
+        clamp(&mut self.start_size, 1.0, 40.0, d.start_size, "startSize");
+        clamp(&mut self.peak_size, 1.0, 40.0, d.peak_size, "peakSize");
+        clamp(&mut self.end_size, 0.0, 40.0, d.end_size, "endSize");
+        clamp(&mut self.rainbow_speed, 0.0, 10.0, d.rainbow_speed, "rainbowSpeed");
+        clamp(&mut self.start_alpha, 0.0, 1.0, d.start_alpha, "startAlpha");
+        clamp(&mut self.peak_alpha, 0.0, 1.0, d.peak_alpha, "peakAlpha");
+        clamp(&mut self.end_alpha, 0.0, 1.0, d.end_alpha, "endAlpha");
 
         if let Some(margin) = self.cull_margin.as_mut() {
-            clamp(margin, 0.0, MAX_CULL_MARGIN, "cullMargin");
+            // A NaN margin was already made `None` above.
+            clamp(margin, 0.0, MAX_CULL_MARGIN, 0.0, "cullMargin");
         }
 
         // Last of the `clamp` calls: the closure holds `changed` until then.
         if let Some(track) = self.emitter_track.as_mut() {
-            clamp(&mut track.duration, 0.0, MAX_EMITTER_TRACK_DURATION, "emitterTrack.duration");
-            // Not through `clamp`: a NaN survives `f32::clamp` and the
-            // equality test there, and a pre-roll must be a real number of
-            // steps.
+            clamp(&mut track.duration, 0.0, MAX_EMITTER_TRACK_DURATION, 0.0, "emitterTrack.duration");
+            // Not through `clamp`: a pre-roll also snaps to the step grid.
             let preroll = sanitize_preroll(track.preroll);
             if preroll.to_bits() != track.preroll.to_bits() {
                 track.preroll = preroll;
@@ -391,8 +407,8 @@ impl ParticleFxConfig {
         // so per-index names would have to be leaked.
         let mut stops_changed = false;
         for stop in self.color_stops.iter_mut().flatten() {
-            let offset = stop.offset.clamp(0.0, 1.0);
-            if offset != stop.offset {
+            let offset = clamp_or_default(stop.offset, 0.0, 1.0, 0.0);
+            if offset.to_bits() != stop.offset.to_bits() {
                 stop.offset = offset;
                 stops_changed = true;
             }
@@ -410,11 +426,14 @@ impl ParticleFxConfig {
         // Ordered pairs, after each side is in range: an inverted pair is
         // repaired by raising max to min, the way Mouseflare's macOS
         // renderer reads `max(min, max)` at spawn time. Only max is
-        // reported -- min was the value the author left within range.
+        // reported -- min was the value the author left within range -- and
+        // only once, if the range clamp above already reported it.
         let mut order = |min: f32, max: &mut f32, max_name: &'static str| {
             if *max < min {
                 *max = min;
-                changed.push(max_name);
+                if !changed.contains(&max_name) {
+                    changed.push(max_name);
+                }
             }
         };
         order(self.initial_speed_min, &mut self.initial_speed_max, "initialSpeedMax");
@@ -533,6 +552,91 @@ mod tests {
         let changed = config.clamp_to_bounds();
         assert_eq!(config.cull_margin, Some(0.0));
         assert!(changed.contains(&"cullMargin"));
+    }
+
+    #[test]
+    fn a_nan_in_any_clamped_field_is_read_as_its_default_and_reported() {
+        // Every f32 the config clamps, with where a NaN should land: the
+        // default's value, as if the field had been left out.
+        let d = ParticleFxConfig::default();
+        let fields = [
+            ("emitter.spawnRateWhileActive", d.emitter.spawn_rate_while_active),
+            ("emitter.spawnRateIdle", d.emitter.spawn_rate_idle),
+            ("emitter.emissionAngle", d.emitter.emission_angle),
+            ("emitter.emissionSpread", d.emitter.emission_spread),
+            ("emitter.velocityInheritance", d.emitter.velocity_inheritance),
+            ("glowRadius", d.glow_radius),
+            ("initialSpeedMin", d.initial_speed_min),
+            ("initialSpeedMax", d.initial_speed_max),
+            ("gravityX", d.gravity_x),
+            ("gravityY", d.gravity_y),
+            ("drag", d.drag),
+            ("turbulence", d.turbulence),
+            ("vortexAttraction", d.vortex_attraction),
+            ("rotationSpeedMin", d.rotation_speed_min),
+            ("rotationSpeedMax", d.rotation_speed_max),
+            ("lifetimeMin", d.lifetime_min),
+            ("lifetimeMax", d.lifetime_max),
+            ("startSize", d.start_size),
+            ("peakSize", d.peak_size),
+            ("endSize", d.end_size),
+            ("rainbowSpeed", d.rainbow_speed),
+            ("startAlpha", d.start_alpha),
+            ("peakAlpha", d.peak_alpha),
+            ("endAlpha", d.end_alpha),
+            ("emitterTrack.duration", 0.0),
+        ];
+        let nan = f32::NAN;
+        // `preroll` has its own NaN test (and is not written when 0).
+        let mut config = tracked(0.0);
+        config.emitter_track.as_mut().unwrap().duration = nan;
+        let e = &mut config.emitter;
+        (e.spawn_rate_while_active, e.spawn_rate_idle, e.emission_angle, e.emission_spread, e.velocity_inheritance) =
+            (nan, nan, nan, nan, nan);
+        let c = &mut config;
+        (c.glow_radius, c.initial_speed_min, c.initial_speed_max, c.gravity_x, c.gravity_y, c.drag) =
+            (nan, nan, nan, nan, nan, nan);
+        (c.turbulence, c.vortex_attraction, c.rotation_speed_min, c.rotation_speed_max) = (nan, nan, nan, nan);
+        (c.lifetime_min, c.lifetime_max, c.start_size, c.peak_size, c.end_size) = (nan, nan, nan, nan, nan);
+        (c.rainbow_speed, c.start_alpha, c.peak_alpha, c.end_alpha) = (nan, nan, nan, nan);
+        c.cull_margin = Some(nan);
+        c.color_stops = Some(vec![ColorStop { offset: nan, color: "#ffffff".into() }]);
+
+        let changed = config.clamp_to_bounds();
+        let json = serde_json::to_value(&config).unwrap();
+        for (name, expected) in fields {
+            assert!(changed.contains(&name), "{name} not reported");
+            let value = name.split('.').fold(&json, |v, key| &v[key]);
+            assert_eq!(value.as_f64().map(|v| v as f32), Some(expected), "{name}");
+        }
+        assert!(changed.contains(&"cullMargin"));
+        assert_eq!(config.cull_margin, None, "a NaN margin is read as none: no culling");
+        assert!(changed.contains(&"colorStops"));
+        assert_eq!(config.color_stops.as_ref().unwrap()[0].offset, 0.0);
+
+        // serde_json writes a surviving NaN as null, so any field this test
+        // forgot to list (or a new one) that kept its NaN shows up here.
+        fn nulls(v: &serde_json::Value, path: String, out: &mut Vec<String>) {
+            match v {
+                serde_json::Value::Null => out.push(path),
+                serde_json::Value::Object(m) => m.iter().for_each(|(k, v)| nulls(v, format!("{path}.{k}"), out)),
+                serde_json::Value::Array(a) => a.iter().enumerate().for_each(|(i, v)| nulls(v, format!("{path}[{i}]"), out)),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        nulls(&json, String::new(), &mut found);
+        // Optional fields the config leaves out.
+        found.retain(|p| ![".author", ".cullMargin", ".soundOnSpawn"].contains(&p.as_str()));
+        assert!(found.is_empty(), "still NaN after clamping: {found:?}");
+    }
+
+    #[test]
+    fn a_nan_max_raised_to_its_min_is_reported_once() {
+        let mut config = ParticleFxConfig { initial_speed_min: 9.0, initial_speed_max: f32::NAN, ..Default::default() };
+        let changed = config.clamp_to_bounds();
+        assert_eq!(config.initial_speed_max, 9.0);
+        assert_eq!(changed.iter().filter(|n| **n == "initialSpeedMax").count(), 1, "{changed:?}");
     }
 
     #[test]

@@ -259,7 +259,7 @@ names it changed, so the host UI can show something like "3 values were out
 of range and have been clamped." Fields with no documented range (shape,
 colors, `sound_on_spawn`) are left as-is.
 
-Two details beyond per-field ranges:
+Three details beyond per-field ranges:
 
 - **Ordered pairs are repaired.** After range clamping, an inverted
   `lifetimeMin`/`lifetimeMax`, `initialSpeedMin`/`Max`, or
@@ -267,6 +267,13 @@ Two details beyond per-field ranges:
   field is reported.
 - **`color_stops` offsets are clamped into [0, 1]** and reported once as
   `colorStops`, not per index.
+- **A NaN is read as if the field were left out** and is reported: it
+  takes `ParticleFxConfig::default()`'s value, `cullMargin` becomes `None`
+  (no culling, what a JS host's NaN already becomes as `null`), and a
+  track's `duration` and `preroll` and a colour stop's `offset` become 0,
+  as the simulation reads them. JSON cannot carry NaN, so this matters
+  only to Rust hosts that build a config in code; they should call
+  `clamp_to_bounds` too if any value might be NaN.
 
 ## Testing
 

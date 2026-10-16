@@ -4,7 +4,7 @@ use crate::rng::Rng;
 use crate::schema::{
     ColorMode, SpinDirection, EmissionPattern, EmitterKeyframe, ParticleFxConfig, TriggerKind,
     MAX_EMITTER_TRACK_DURATION,
-    sanitize_preroll,
+    clamp_or_default, sanitize_preroll,
 };
 use std::sync::Arc;
 
@@ -938,14 +938,14 @@ fn color_rng(seed: u64) -> Rng {
 }
 
 /// Parses `config.color_stops` into a sorted `Palette`. Offsets are
-/// clamped into [0, 1] here as well as in `clamp_to_bounds`, so a config
-/// that skipped clamping still samples sanely.
+/// clamped into [0, 1] here as well as in `clamp_to_bounds`, by the same
+/// rule (NaN is 0), so a config that skipped clamping samples the same.
 fn build_palette(config: &ParticleFxConfig) -> Palette {
     let mut palette: Palette = config
         .color_stops
         .iter()
         .flatten()
-        .map(|stop| (stop.offset.clamp(0.0, 1.0), hex_to_rgb(&stop.color)))
+        .map(|stop| (clamp_or_default(stop.offset, 0.0, 1.0, 0.0), hex_to_rgb(&stop.color)))
         .collect();
     palette.sort_by(|a, b| a.0.total_cmp(&b.0));
     palette
