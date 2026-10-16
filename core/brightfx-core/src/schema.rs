@@ -180,6 +180,15 @@ pub const MAX_EMITTER_TRACK_DURATION: f32 = 600.0;
 /// generators (`brightfx-tracks`) clamp the same way the core does.
 pub const MAX_PREROLL: f32 = 60.0;
 
+/// `value` brought into `min..=max`, or `None` if it already was. NaN, which
+/// `f32::clamp` passes through, is read as 0 (then clamped, so it lands on
+/// the nearer bound when 0 is out of range): the simulation's reading of a
+/// NaN `duration` or `preroll`, and neutral for the signed fields.
+fn clamp_into(value: f32, min: f32, max: f32) -> Option<f32> {
+    let clamped = if value.is_nan() { 0.0_f32.clamp(min, max) } else { value.clamp(min, max) };
+    (value.is_nan() || clamped != value).then_some(clamped)
+}
+
 /// `preroll` as the core reads it: clamped into `0..=MAX_PREROLL`, so +inf
 /// (what serde reads from a JSON number past f32) is the longest pre-roll,
 /// as it is the longest `duration`, and NaN is 0. Then snapped up to the
@@ -333,13 +342,13 @@ impl ParticleFxConfig {
     /// Clamps every numeric field with a documented valid range (per
     /// Mouseflare's original `fxEditor.ts` comments) into that range,
     /// tolerating out-of-range values from hand-edited JSON instead of
-    /// rejecting the whole config. Returns the field names that were
-    /// changed, so a host UI can surface a warning.
+    /// rejecting the whole config. A NaN is read as 0 (see `clamp_into`).
+    /// Returns the field names that were changed, so a host UI can surface
+    /// a warning.
     pub fn clamp_to_bounds(&mut self) -> Vec<&'static str> {
         let mut changed = Vec::new();
         let mut clamp = |value: &mut f32, min: f32, max: f32, name: &'static str| {
-            let clamped = value.clamp(min, max);
-            if clamped != *value {
+            if let Some(clamped) = clamp_into(*value, min, max) {
                 *value = clamped;
                 changed.push(name);
             }
@@ -377,9 +386,7 @@ impl ParticleFxConfig {
         // Last of the `clamp` calls: the closure holds `changed` until then.
         if let Some(track) = self.emitter_track.as_mut() {
             clamp(&mut track.duration, 0.0, MAX_EMITTER_TRACK_DURATION, "emitterTrack.duration");
-            // Not through `clamp`: a NaN survives `f32::clamp` and the
-            // equality test there, and a pre-roll must be a real number of
-            // steps.
+            // Not through `clamp`: a pre-roll also snaps to the step grid.
             let preroll = sanitize_preroll(track.preroll);
             if preroll.to_bits() != track.preroll.to_bits() {
                 track.preroll = preroll;
@@ -391,8 +398,7 @@ impl ParticleFxConfig {
         // so per-index names would have to be leaked.
         let mut stops_changed = false;
         for stop in self.color_stops.iter_mut().flatten() {
-            let offset = stop.offset.clamp(0.0, 1.0);
-            if offset != stop.offset {
+            if let Some(offset) = clamp_into(stop.offset, 0.0, 1.0) {
                 stop.offset = offset;
                 stops_changed = true;
             }
@@ -533,6 +539,66 @@ mod tests {
         let changed = config.clamp_to_bounds();
         assert_eq!(config.cull_margin, Some(0.0));
         assert!(changed.contains(&"cullMargin"));
+    }
+
+    #[test]
+    fn a_nan_in_any_clamped_field_is_read_as_zero_and_reported() {
+        // Every f32 the config clamps, with where a NaN should land: 0, or
+        // the nearer bound when 0 is out of range. Read back through serde_json, which writes a surviving NaN as
+        // null, so a field missed here fails as None.
+        let fields = [
+            ("emitter.spawnRateWhileActive", 0.0_f32),
+            ("emitter.spawnRateIdle", 0.0),
+            ("emitter.emissionAngle", 0.0),
+            ("emitter.emissionSpread", 0.0),
+            ("emitter.velocityInheritance", 0.0),
+            ("glowRadius", 0.0),
+            ("initialSpeedMin", 0.0),
+            ("initialSpeedMax", 0.0),
+            ("gravityX", 0.0),
+            ("gravityY", 0.0),
+            ("drag", 0.85),
+            ("turbulence", 0.0),
+            ("vortexAttraction", 0.0),
+            ("rotationSpeedMin", 0.0),
+            ("rotationSpeedMax", 0.0),
+            ("lifetimeMin", 10.0),
+            ("lifetimeMax", 10.0),
+            ("startSize", 1.0),
+            ("peakSize", 1.0),
+            ("endSize", 0.0),
+            ("rainbowSpeed", 0.0),
+            ("startAlpha", 0.0),
+            ("peakAlpha", 0.0),
+            ("endAlpha", 0.0),
+            ("cullMargin", 0.0),
+            ("emitterTrack.duration", 0.0),
+        ];
+        let nan = f32::NAN;
+        // `preroll` has its own NaN test (and is not written when 0).
+        let mut config = tracked(0.0);
+        config.emitter_track.as_mut().unwrap().duration = nan;
+        let e = &mut config.emitter;
+        (e.spawn_rate_while_active, e.spawn_rate_idle, e.emission_angle, e.emission_spread, e.velocity_inheritance) =
+            (nan, nan, nan, nan, nan);
+        let c = &mut config;
+        (c.glow_radius, c.initial_speed_min, c.initial_speed_max, c.gravity_x, c.gravity_y, c.drag) =
+            (nan, nan, nan, nan, nan, nan);
+        (c.turbulence, c.vortex_attraction, c.rotation_speed_min, c.rotation_speed_max) = (nan, nan, nan, nan);
+        (c.lifetime_min, c.lifetime_max, c.start_size, c.peak_size, c.end_size) = (nan, nan, nan, nan, nan);
+        (c.rainbow_speed, c.start_alpha, c.peak_alpha, c.end_alpha) = (nan, nan, nan, nan);
+        c.cull_margin = Some(nan);
+        c.color_stops = Some(vec![ColorStop { offset: nan, color: "#ffffff".into() }]);
+
+        let changed = config.clamp_to_bounds();
+        let json = serde_json::to_value(&config).unwrap();
+        for (name, min) in fields {
+            assert!(changed.contains(&name), "{name} not reported");
+            let value = name.split('.').fold(&json, |v, key| &v[key]);
+            assert_eq!(value.as_f64().map(|v| v as f32), Some(min), "{name}");
+        }
+        assert!(changed.contains(&"colorStops"));
+        assert_eq!(config.color_stops.unwrap()[0].offset, 0.0);
     }
 
     #[test]

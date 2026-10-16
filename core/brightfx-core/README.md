@@ -267,6 +267,11 @@ Two details beyond per-field ranges:
   field is reported.
 - **`color_stops` offsets are clamped into [0, 1]** and reported once as
   `colorStops`, not per index.
+- **NaN is read as 0** (or the nearer bound, when 0 is outside the range:
+  `drag` 0.85, `lifetimeMin`/`Max` 10, `startSize`/`peakSize` 1) and is
+  reported, as the simulation already reads a NaN `duration` or `preroll`.
+  JSON cannot carry NaN, so this is for Rust and C hosts that build a
+  config in code.
 
 ## Testing
 
