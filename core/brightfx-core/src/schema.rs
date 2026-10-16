@@ -199,7 +199,10 @@ pub fn sanitize_preroll(preroll: f32) -> f32 {
 
 /// Upper bound on `cullMargin`, in logical px. A sanity limit, well past any
 /// real frame (`MAX_VIEWPORT_SIDE` is 8192 device px), not a numeric one.
-const MAX_CULL_MARGIN: f32 = 10_000.0;
+/// `clamp_to_bounds` caps a larger margin here and raises a negative one to
+/// 0, reporting `cullMargin`. Public, like `MAX_PREROLL`, so wrappers and
+/// their docs cite one value.
+pub const MAX_CULL_MARGIN: f32 = 10_000.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -536,7 +539,9 @@ mod tests {
     fn an_absurd_cull_margin_is_capped_and_an_absent_one_is_left_alone() {
         let mut config = ParticleFxConfig { cull_margin: Some(1.0e9), ..Default::default() };
         assert!(config.clamp_to_bounds().contains(&"cullMargin"));
-        assert_eq!(config.cull_margin, Some(10_000.0));
+        assert_eq!(config.cull_margin, Some(MAX_CULL_MARGIN));
+        // The docs quote the value; changing it means changing them too.
+        assert_eq!(MAX_CULL_MARGIN, 10_000.0);
 
         let mut config = ParticleFxConfig::default();
         assert!(!config.clamp_to_bounds().contains(&"cullMargin"));

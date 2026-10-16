@@ -416,9 +416,10 @@ fn every_cull_margin_already_holds_its_emitters_path() {
 /// fade out inside the frame and gain almost nothing (measured within 4%).
 const LEAVES_THE_FRAME: [&str; 3] = ["frosting-rain", "sprinkle-rain", "flight-arc"];
 
-/// `flight-arc` is sprite-mode: the composition draws 60-120 px glyphs, so
-/// its margin covers half a glyph, which the core's size cap of 40 does not
-/// show. 2 x 60.
+/// `flight-arc` is sprite-mode: the composition draws the glyphs, not the
+/// core (whose size cap is 40). The throws spin, so the margin covers half a
+/// rotating glyph's diagonal: 120 is enough for squares up to ~170 px. See
+/// the `flight_arc` doc.
 const SPRITE_GLYPH_MARGIN: f32 = 120.0;
 
 #[test]

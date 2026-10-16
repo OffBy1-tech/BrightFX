@@ -76,7 +76,21 @@ export type EffectConfig = {
    *  `setBounds`), after it has been inside that area once. A particle
    *  outside the area that is moving away from it is removed too, so an
    *  emitter placed off-screen works with any margin. Omitted or `null`
-   *  never culls. */
+   *  never culls. Clamped to 0 through 10,000 (the core's
+   *  `MAX_CULL_MARGIN`), with `cullMargin` listed in `setConfig`'s
+   *  `clamped`. NaN and ±Infinity are not clamped: `JSON.stringify` writes
+   *  them as `null`, which turns culling off without a report.
+   *
+   *  The margin is measured from the particle's center, so it must cover
+   *  what is drawn around the center: half a sprite's width and height, or
+   *  half its diagonal if it rotates (glow and size, in frame mode).
+   *  Otherwise a particle is removed while part of it is still on screen.
+   *  A preset's margin assumes a sprite size it cannot see. To raise it,
+   *  set `Math.max(config.cullMargin, needed)` on the config after any
+   *  `fitTrack` (which may already have raised it further), and only when
+   *  it has a margin: setting one where it is `null` turns culling on for
+   *  a preset not tuned for it. See "Culling bounds" in the
+   *  `brightfx-remotion` README. */
   cullMargin?: number | null;
 } & Record<string, unknown>;
 

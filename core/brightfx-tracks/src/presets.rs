@@ -508,9 +508,12 @@ pub fn bubbles() -> ParticleFxConfig {
 /// 300-step life outlasts the slowest crossing, so nothing vanishes on
 /// screen.
 ///
-/// `cullMargin` 120 is twice the glyph's 60 px half-extent. The core's
-/// `size` (34-40) is not what is drawn, and a margin sized to it would
-/// remove a glyph while part of it is still on screen. The emitter at
+/// `cullMargin` 120 is sized to the glyph, not to the core's `size` (34-40),
+/// which is not what is drawn. The glyph is the host's, so this is an
+/// assumption the preset cannot check: the throws spin, so a glyph's
+/// corners reach half its diagonal past its center, and 120 covers square
+/// glyphs up to ~170 px. A host drawing larger ones raises it (see
+/// "Culling bounds" in the `brightfx-remotion` README). The emitter at
 /// x = -100 is inside the margin in the authored frame, so nothing is
 /// culled at birth; the entry rule would keep a throw moving toward the
 /// frame even if it were not. `fit_track` raises it where a wider frame
