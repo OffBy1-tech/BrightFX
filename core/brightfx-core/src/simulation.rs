@@ -639,7 +639,10 @@ impl Simulation {
                 self.spawn_particle(false);
             }
         } else if self.config.emitter.spawn_rate_idle > 0.0
-            && self.live.rng.f32() < self.config.emitter.spawn_rate_idle * 0.3
+            // `rate * 0.3` per frame, saturating at 1, scaled to the
+            // step: `fe <= MAX_STEP_FE` (see `advance`). At fe 1 this is
+            // the draw Mouseflare made once per 60 Hz frame.
+            && self.live.rng.f32() < (self.config.emitter.spawn_rate_idle * 0.3).min(1.0) * fe
         {
             self.spawn_particle(false);
         }
@@ -1244,6 +1247,42 @@ mod tests {
         sim.advance(TICK);
 
         assert_eq!(sim.particle_count(), 1);
+    }
+
+    /// Live particles after `steps` advances of `fe` frame-equivalents each,
+    /// with the emitter idle. Lifetimes are at the schema's 300 ceiling so
+    /// nothing expires inside the 250 fe these tests run.
+    fn idle_count(rate: f32, fe: f32, steps: usize) -> usize {
+        let mut config = base_config();
+        config.emitter.spawn_rate_idle = rate;
+        config.lifetime_min = 300.0;
+        config.lifetime_max = 300.0;
+        let mut sim = Simulation::new(config, 11);
+        sim.set_emitter(0.0, 0.0, 0.0, 0.0, false);
+        for _ in 0..steps {
+            sim.advance(fe / 60.0);
+        }
+        sim.particle_count()
+    }
+
+    #[test]
+    fn idle_emission_is_a_rate_per_frame_not_per_step() {
+        // Rate 1 is 0.3 per frame. 250 fe at fe 0.4 (a 144 Hz-like host)
+        // expects 75, as 250 steps at fe 1 do; a per-step draw gave ~188.
+        // The band is about 3 standard deviations either side.
+        let fast = idle_count(1.0, 0.4, 625);
+        assert!((50..=100).contains(&fast), "fe 0.4: {fast}");
+        let sixty = idle_count(1.0, 1.0, 250);
+        assert!((50..=100).contains(&sixty), "fe 1: {sixty}");
+    }
+
+    #[test]
+    fn saturated_idle_emission_is_one_per_frame_at_any_rate() {
+        // Rate 5 asks for 1.5 per frame and gets 1. At fe 0.5 that is one
+        // every other step, about 100 in 200 steps; a per-step draw gave 200.
+        let half = idle_count(5.0, 0.5, 200);
+        assert!((80..=120).contains(&half), "fe 0.5: {half}");
+        assert_eq!(idle_count(5.0, 1.0, 100), 100, "fe 1: every step");
     }
 
     #[test]

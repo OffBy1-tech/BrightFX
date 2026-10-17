@@ -320,8 +320,8 @@ impl ParticleFxConfig {
     /// repeated bursts from a track or host are not modelled. Call after
     /// `clamp_to_bounds`; the config is not changed.
     pub fn pool_warnings(&self) -> Vec<String> {
-        // Idle emission is one particle at most per step, with probability
-        // `rate * 0.3` (see `Simulation::step`).
+        // Idle emission is `rate * 0.3` particles per frame-equivalent,
+        // at most one (see `Simulation::step`), at any host refresh rate.
         let idle = (self.emitter.spawn_rate_idle * 0.3).min(1.0);
         let rate = self.emitter.spawn_rate_while_active.max(idle);
         let peak = rate * self.lifetime_max + self.emitter.spawn_burst_size as f32;
