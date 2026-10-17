@@ -15,6 +15,11 @@ use std::sync::Arc;
 /// mass-expire particles.
 const REFERENCE_HZ: f32 = 60.0;
 const MAX_DELTA_SECONDS: f32 = 0.1;
+/// Continuous emission's ceiling, per frame-equivalent, so a long step
+/// spawns as many as the same time at 60 Hz would. Above the schema's
+/// `spawnRateWhileActive` maximum of 20, so a clamped config never reaches
+/// it; spawns past it are dropped rather than carried to the next step.
+const MAX_SPAWNS_PER_FRAME: f32 = 40.0;
 /// Fixed step size used when replaying an `EmitterTrack` in `seek`, so that
 /// scrubbing to the same time always reproduces the same buffer. Public so
 /// track generators (`brightfx-tracks`) derive their own limits from it
@@ -612,11 +617,12 @@ impl Simulation {
 
         if self.live.emitter_active {
             self.live.spawn_budget += self.config.emitter.spawn_rate_while_active * fe;
-            let count = (self.live.spawn_budget.floor() as i32).clamp(0, 40) as u32;
-            // Spawns past the cap are dropped, as `dt` is clamped: carried
-            // over, a run of long steps builds a backlog that outlives the
-            // rate that made it. Below the cap this is the fraction left.
-            self.live.spawn_budget = self.live.spawn_budget.fract();
+            // The whole of what was asked for leaves the budget, spawned or
+            // not: carried past the cap, a backlog would outlive the rate
+            // that made it.
+            let wanted = self.live.spawn_budget.floor();
+            self.live.spawn_budget -= wanted;
+            let count = wanted.clamp(0.0, MAX_SPAWNS_PER_FRAME * fe.max(1.0)) as u32;
             for _ in 0..count {
                 self.spawn_particle(false);
             }
@@ -1093,23 +1099,49 @@ mod tests {
     }
 
     #[test]
-    fn spawns_past_the_per_step_cap_are_dropped_not_carried_over() {
-        // At the longest step (0.1 s, fe = 6) a rate of 20 asks for 120
-        // spawns and the cap allows 40. The other 80 are dropped: carried
-        // over, they would build a backlog that keeps spawning 40 per step
-        // after the rate falls.
+    fn long_steps_spawn_at_the_configured_rate_and_leave_no_backlog() {
+        // At the longest step (0.1 s, fe = 6) the schema's top rate of 20
+        // asks for 120 spawns, and all 120 come. A fixed per-step cap of 40
+        // used to spawn 40 and carry the other 80, so the next 1/60 s tick
+        // spent the backlog (40) instead of the rate (20).
         let mut config = base_config();
         config.emitter.spawn_rate_while_active = 20.0;
-        let mut sim = Simulation::new(config.clone(), 1);
+        let mut sim = Simulation::new(config, 1);
         sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
         sim.advance(MAX_DELTA_SECONDS);
         sim.advance(MAX_DELTA_SECONDS);
-        assert_eq!(sim.particle_count(), 80);
+        assert_eq!(sim.particle_count(), 2 * 120);
 
-        config.emitter.spawn_rate_while_active = 1.0;
-        sim.set_config(config);
-        sim.advance(TICK); // fe = 1: the new rate alone fills the budget to 1
-        assert_eq!(sim.particle_count(), 81);
+        sim.advance(TICK);
+        assert_eq!(sim.particle_count(), 2 * 120 + 20);
+    }
+
+    #[test]
+    fn the_fraction_of_a_spawn_carries_across_long_steps() {
+        // 6.9 * fe 6 = 41.4 per step: 41, 41 (41.8), 42 (42.2).
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 6.9;
+        let mut sim = Simulation::new(config, 1);
+        sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
+        for _ in 0..3 {
+            sim.advance(MAX_DELTA_SECONDS);
+        }
+        assert_eq!(sim.particle_count(), 41 + 41 + 42);
+    }
+
+    #[test]
+    fn spawns_past_the_cap_are_dropped_not_carried_over() {
+        // No clamped config reaches the cap (20 per fe against 40), so the
+        // rate is set past the schema here to exercise the guard.
+        let mut sim = Simulation::new(base_config(), 1);
+        sim.config.emitter.spawn_rate_while_active = 50.0;
+        sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
+        sim.advance(TICK);
+        assert_eq!(sim.particle_count(), MAX_SPAWNS_PER_FRAME as usize);
+
+        sim.config.emitter.spawn_rate_while_active = 1.0;
+        sim.advance(TICK); // the 10 past the cap are gone: just the new 1
+        assert_eq!(sim.particle_count(), MAX_SPAWNS_PER_FRAME as usize + 1);
     }
 
     #[test]
