@@ -120,7 +120,8 @@ pub unsafe extern "C" fn bfx_trigger_burst(sim: *mut BfxSimulation) {
     }
 }
 
-/// Advances the simulation by `dt` seconds.
+/// Advances the simulation by `dt` seconds, clamped to 0..=0.1. A `dt`
+/// longer than 1/60 s runs as several steps of at most 1/60 s each.
 ///
 /// # Safety
 /// `sim` must be a valid handle or NULL.

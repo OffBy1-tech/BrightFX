@@ -13,6 +13,8 @@ use std::sync::Arc;
 /// `step` converts a wall-clock `dt` (seconds) into frame-equivalents (`fe`)
 /// before applying it. `dt` is clamped so a stall can't teleport or
 /// mass-expire particles.
+/// A `dt` past one frame is run as several steps of at most a frame (see
+/// `Simulation::advance`), so no step has `fe > 1`.
 const REFERENCE_HZ: f32 = 60.0;
 const MAX_DELTA_SECONDS: f32 = 0.1;
 /// Fixed step size used when replaying an `EmitterTrack` in `seek`, so that
@@ -402,9 +404,19 @@ impl Simulation {
         self.rebuild_buffer();
     }
 
+    /// Advances by `dt` seconds, clamped to `0..=0.1` so a stall can't
+    /// teleport or mass-expire particles. A `dt` longer than one 60 Hz
+    /// frame runs as `ceil(fe)` equal steps of at most a frame each, so
+    /// spawns spread over the frame's ages and the physics matches 60 Hz.
+    /// The emitter stays where `set_emitter` put it for every step.
     pub fn advance(&mut self, dt: f32) {
         self.leave_baked();
-        self.step(dt);
+        let fe = dt.max(0.0).min(MAX_DELTA_SECONDS) * REFERENCE_HZ;
+        let steps = fe.ceil().max(1.0);
+        for _ in 0..steps as u32 {
+            self.step(fe / steps);
+        }
+        self.rebuild_buffer();
     }
 
     pub fn buffer(&self) -> &[ParticleInstance] {
@@ -520,7 +532,7 @@ impl Simulation {
         // `leave_baked` first, so a cursor can only survive a pure replay.
         let from = match self.baked {
             Some(step) if step <= n => step,
-            _ => self.restart_track(&track, n),
+            _ => self.restart_track(&track),
         };
 
         for k in from..n {
@@ -545,7 +557,7 @@ impl Simulation {
 
             self.fire_triggers(&track, k + 1);
 
-            self.step(PLAYBACK_STEP);
+            self.step(PLAYBACK_STEP * REFERENCE_HZ);
 
             if k + 1 == track.preroll_steps && !self.preroll_saved {
                 if let Some(store) = self.preroll_store.as_mut() {
@@ -555,6 +567,10 @@ impl Simulation {
             }
         }
 
+        // Steps don't rebuild the buffer, so it is built once here: from
+        // the replayed state, or unchanged state on a forward seek that
+        // ran no steps.
+        self.rebuild_buffer();
         self.baked = Some(n);
     }
 
@@ -569,18 +585,12 @@ impl Simulation {
     /// one: every seek target is at or past it, and that state is what the
     /// steps it skips would have produced. The copy overwrites every field
     /// a reset would, so there is no reset first. Returns the step the
-    /// replay continues from; `n` is the step it runs to.
-    fn restart_track(&mut self, track: &BakedTrack, n: u32) -> u32 {
+    /// replay continues from.
+    fn restart_track(&mut self, track: &BakedTrack) -> u32 {
         if self.preroll_saved {
             self.leave_baked();
             if let Some(saved) = &self.preroll_store {
                 self.live.copy_from(saved);
-                // Every step ends by rebuilding the buffer, so only a
-                // replay that runs none (a seek to t=0) rebuilds it here:
-                // as the last pre-roll step left it.
-                if n == track.preroll_steps {
-                    self.rebuild_buffer();
-                }
                 return track.preroll_steps;
             }
         }
@@ -606,9 +616,9 @@ impl Simulation {
         }
     }
 
-    fn step(&mut self, dt: f32) {
-        let seconds = dt.max(0.0).min(MAX_DELTA_SECONDS);
-        let fe = seconds * REFERENCE_HZ;
+    /// One step of `fe` frame-equivalents, at most 1. Does not rebuild the
+    /// buffer: `advance` and `seek` rebuild once after their steps.
+    fn step(&mut self, fe: f32) {
 
         if self.live.emitter_active {
             self.live.spawn_budget += self.config.emitter.spawn_rate_while_active * fe;
@@ -689,8 +699,6 @@ impl Simulation {
 
             true
         });
-
-        self.rebuild_buffer();
     }
 
     fn spawn_particle(&mut self, is_burst: bool) {
@@ -1111,6 +1119,51 @@ mod tests {
 
         sim.advance(TICK);
         assert_eq!(sim.particle_count(), 2 * 120 + 20);
+    }
+
+    /// Exercises every per-step term, so a sub-step that differed from a
+    /// 1/60 s step anywhere would show in the buffer.
+    fn busy_config() -> ParticleFxConfig {
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 20.0;
+        config.emitter.emission_spread = 360.0;
+        config.initial_speed_min = 2.0;
+        config.initial_speed_max = 6.0;
+        config.gravity_y = 1.0;
+        config.drag = 0.98;
+        config.turbulence = 2.0;
+        config.vortex_attraction = 0.5;
+        config.rotation_speed_max = 0.2;
+        config
+    }
+
+    #[test]
+    fn a_long_advance_matches_the_same_time_in_sixtieths() {
+        let mut long = Simulation::new(busy_config(), 7);
+        let mut short = Simulation::new(busy_config(), 7);
+        long.set_emitter(100.0, 100.0, 0.0, 0.0, true);
+        short.set_emitter(100.0, 100.0, 0.0, 0.0, true);
+        for _ in 0..4 {
+            long.advance(3.0 / 60.0); // fe 3.0: three steps of fe 1.0
+            advance_steps(&mut short, 3);
+        }
+        assert_eq!(long.particle_count(), short.particle_count());
+        assert_eq!(long.buffer(), short.buffer());
+    }
+
+    #[test]
+    fn a_long_advance_spreads_spawn_ages_over_the_frame() {
+        // fe 6 is six steps; the 20 spawned in step k have aged 7 - k.
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 20.0;
+        let mut sim = Simulation::new(config, 1);
+        sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
+        sim.advance(MAX_DELTA_SECONDS);
+        let mut ages: Vec<f32> = sim.live.pool.iter().map(|p| p.life).collect();
+        ages.sort_by(f32::total_cmp);
+        ages.dedup();
+        assert_eq!(ages, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(sim.particle_count(), 120);
     }
 
     #[test]
