@@ -26,3 +26,5 @@ code and the READMEs are the reference for how things work now
 | [Preset cull margin](specs/2026-10-04-preset-cull-margin-design.md) | spec | shipped |
 | [Emitter track pre-roll](specs/2026-10-08-emitter-track-preroll-design.md) | spec | shipped with PR #36 |
 | [Emitter track pre-roll](plans/2026-10-09-emitter-track-preroll.md) | plan | shipped with PR #36 |
+| [Sub-stepping advance](specs/2026-10-17-advance-substep-design.md) | spec | shipped with PR #50 |
+| [Sub-stepping advance](plans/2026-10-17-advance-substep.md) | plan | shipped with PR #50 |

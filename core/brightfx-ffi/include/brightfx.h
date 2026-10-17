@@ -90,7 +90,9 @@ BFX_MUST_USE char *bfx_set_bounds(struct BfxSimulation *sim, float width, float 
 void bfx_trigger_burst(struct BfxSimulation *sim);
 
 /**
- * Advances the simulation by `dt` seconds.
+ * Advances the simulation by `dt` seconds, clamped to 0..=0.1. A `dt`
+ * longer than 1.1/60 s runs as several steps of at most 1.1/60 s each, so a
+ * 60 Hz frame that runs a little long is still one step.
  *
  * # Safety
  * `sim` must be a valid handle or NULL.
