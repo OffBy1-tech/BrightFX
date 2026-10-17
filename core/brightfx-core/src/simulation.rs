@@ -15,11 +15,6 @@ use std::sync::Arc;
 /// mass-expire particles.
 const REFERENCE_HZ: f32 = 60.0;
 const MAX_DELTA_SECONDS: f32 = 0.1;
-/// Continuous emission's ceiling, per frame-equivalent, so a long step
-/// spawns as many as the same time at 60 Hz would. Above the schema's
-/// `spawnRateWhileActive` maximum of 20, so a clamped config never reaches
-/// it; spawns past it are dropped rather than carried to the next step.
-const MAX_SPAWNS_PER_FRAME: f32 = 40.0;
 /// Fixed step size used when replaying an `EmitterTrack` in `seek`, so that
 /// scrubbing to the same time always reproduces the same buffer. Public so
 /// track generators (`brightfx-tracks`) derive their own limits from it
@@ -617,12 +612,14 @@ impl Simulation {
 
         if self.live.emitter_active {
             self.live.spawn_budget += self.config.emitter.spawn_rate_while_active * fe;
-            // The whole of what was asked for leaves the budget, spawned or
-            // not: carried past the cap, a backlog would outlive the rate
-            // that made it.
+            // Every whole spawn asked for is made, so a long step emits as
+            // many as the same time at 60 Hz, and only the fraction carries.
+            // Mouseflare capped this at 40 per step, which lost spawns on
+            // steps past ~34 ms and, carried over, built a backlog. Past the
+            // pool a spawn only evicts this step's own, so that is the bound.
             let wanted = self.live.spawn_budget.floor();
             self.live.spawn_budget -= wanted;
-            let count = wanted.clamp(0.0, MAX_SPAWNS_PER_FRAME * fe.max(1.0)) as u32;
+            let count = wanted.clamp(0.0, MAX_PARTICLES as f32) as u32;
             for _ in 0..count {
                 self.spawn_particle(false);
             }
@@ -1130,18 +1127,20 @@ mod tests {
     }
 
     #[test]
-    fn spawns_past_the_cap_are_dropped_not_carried_over() {
-        // No clamped config reaches the cap (20 per fe against 40), so the
-        // rate is set past the schema here to exercise the guard.
-        let mut sim = Simulation::new(base_config(), 1);
-        sim.config.emitter.spawn_rate_while_active = 50.0;
+    fn short_steps_keep_the_rate() {
+        // fe 0.1 at rate 2 is 0.2 per step: a spawn every 5th step, so 600
+        // steps (60 frame-equivalents) make 120 -- give or take one to f32
+        // rounding in the running sum.
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 2.0;
+        config.lifetime_min = 1000.0;
+        config.lifetime_max = 1000.0;
+        let mut sim = Simulation::new(config, 1);
         sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
-        sim.advance(TICK);
-        assert_eq!(sim.particle_count(), MAX_SPAWNS_PER_FRAME as usize);
-
-        sim.config.emitter.spawn_rate_while_active = 1.0;
-        sim.advance(TICK); // the 10 past the cap are gone: just the new 1
-        assert_eq!(sim.particle_count(), MAX_SPAWNS_PER_FRAME as usize + 1);
+        for _ in 0..600 {
+            sim.advance(TICK / 10.0);
+        }
+        assert!((119..=120).contains(&sim.particle_count()), "{}", sim.particle_count());
     }
 
     #[test]
