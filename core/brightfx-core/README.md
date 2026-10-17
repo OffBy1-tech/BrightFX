@@ -272,13 +272,15 @@ Three details beyond per-field ranges:
   (no culling, what a JS host's NaN already becomes as `null`), and a
   track's `duration` and `preroll` and a colour stop's `offset` become 0,
   as the simulation reads them. JSON cannot carry NaN, so this matters
-  only to Rust hosts that build a config in code. `Simulation::new` and
-  `set_config` apply the same reading to any NaN or infinite field
-  themselves (an infinity becomes the range's end), so a config that
-  skipped `clamp_to_bounds` cannot turn positions or the spawn budget into
-  NaN. They leave finite values alone, in range or not, and report
-  nothing: call `clamp_to_bounds` for the ranges and the report.
-  `clamp_or_default` is the rule itself, public for generators.
+  only to Rust hosts that build a config in code.
+
+`Simulation::new` and `set_config` run `clamp_to_bounds` themselves and drop
+the report, so a config built in code plays exactly as the ABI would play
+it, and `Simulation::config()` returns the clamped config. An out-of-range
+value is not available to a Rust host either: a negative `drag`, for one,
+would make every position NaN. Call `clamp_to_bounds` beforehand to see
+what changed. `clamp_or_default` is the per-field rule, public for
+generators.
 
 ## Testing
 
