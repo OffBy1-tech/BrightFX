@@ -247,7 +247,13 @@ pub struct Simulation {
 }
 
 impl Simulation {
-    pub fn new(config: ParticleFxConfig, seed: u64) -> Self {
+    /// The config is run through `clamp_to_bounds` first, so one built in
+    /// code that skipped it plays as the ABI would play it (a NaN or a
+    /// negative `drag`, say, cannot make positions NaN). `config()` returns
+    /// the clamped config. The report is dropped: call `clamp_to_bounds`
+    /// beforehand to see it.
+    pub fn new(mut config: ParticleFxConfig, seed: u64) -> Self {
+        config.clamp_to_bounds();
         let mut sim = Self {
             palette: build_palette(&config),
             baked_track: build_baked_track(&config),
@@ -271,8 +277,10 @@ impl Simulation {
     /// Swaps the config. Live particles keep their state, except that the
     /// cull rule is re-applied to them at once, so a smaller `cullMargin`
     /// takes effect without waiting for a step. Any config does this, not
-    /// only one that changes the margin, and the cull is permanent.
-    pub fn set_config(&mut self, config: ParticleFxConfig) {
+    /// only one that changes the margin, and the cull is permanent. The
+    /// config is clamped as `new` clamps it.
+    pub fn set_config(&mut self, mut config: ParticleFxConfig) {
+        config.clamp_to_bounds();
         self.palette = build_palette(&config);
         self.baked_track = build_baked_track(&config);
         self.config = config;
@@ -961,11 +969,8 @@ fn build_baked_track(config: &ParticleFxConfig) -> Option<Arc<BakedTrack>> {
 
     // `clamp_to_bounds` enforces these ranges for well-behaved hosts, but
     // `Simulation` can be built directly from unvalidated JSON, so the
-    // ceilings must hold regardless. `max`/`min` rather than `clamp`: a
-    // NaN duration must collapse to 0.0 here, and `clamp` would
-    // propagate it.
-    #[allow(clippy::manual_clamp)]
-    let duration_cap = track.duration.max(0.0).min(MAX_EMITTER_TRACK_DURATION);
+    // ceilings must hold regardless.
+    let duration_cap = clamp_or_default(track.duration, 0.0, MAX_EMITTER_TRACK_DURATION, 0.0);
     let preroll = sanitize_preroll(track.preroll);
     let preroll_steps = grid_step(preroll);
 
@@ -1146,15 +1151,18 @@ mod tests {
     fn particle_expires_after_max_life() {
         let mut config = base_config();
         config.emitter.spawn_burst_size = 1;
-        config.lifetime_min = 2.0;
-        config.lifetime_max = 2.0;
+        // The shortest lifetime `clamp_to_bounds` allows.
+        config.lifetime_min = 10.0;
+        config.lifetime_max = 10.0;
         let mut sim = Simulation::new(config, 1);
 
         sim.trigger_burst();
         assert_eq!(sim.particle_count(), 1);
-        sim.advance(TICK); // life 0 -> 1, still alive
+        for _ in 0..9 {
+            sim.advance(TICK); // life up to 9, still alive
+        }
         assert_eq!(sim.particle_count(), 1);
-        sim.advance(TICK); // life 1 -> 2, 2 >= max_life => removed
+        sim.advance(TICK); // life 9 -> 10, 10 >= max_life => removed
         assert_eq!(sim.particle_count(), 0);
     }
 
@@ -1189,6 +1197,54 @@ mod tests {
             for channel in p.color {
                 assert!(channel.is_finite(), "non-finite color channel: {:?}", p.color);
             }
+        }
+    }
+
+    #[test]
+    fn a_bad_drag_from_a_config_that_skipped_clamping_leaves_positions_finite() {
+        // A negative drag is NaN under `powf` at a non-integer frame
+        // equivalent, as at 144 Hz.
+        for drag in [f32::NAN, -0.5] {
+            let mut config = base_config();
+            config.emitter.spawn_burst_size = 5;
+            config.drag = drag;
+            let mut sim = Simulation::new(config, 1);
+
+            sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
+            sim.trigger_burst();
+            for _ in 0..10 {
+                sim.advance(1.0 / 144.0);
+            }
+            assert!(sim.particle_count() > 0);
+            for p in sim.buffer() {
+                assert!(p.x.is_finite() && p.y.is_finite(), "drag {drag}: non-finite position: {p:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_bad_spawn_rate_does_not_leave_a_bad_budget_for_the_next_config() {
+        // `set_config` keeps the spawn budget. A NaN rate used to make it
+        // NaN, so a valid config afterwards never spawned; a negative one
+        // drove it ever lower, and +MAX then -MAX made it inf - inf.
+        for rates in [vec![f32::NAN], vec![-20.0], vec![f32::MAX, -f32::MAX]] {
+            let mut sim = Simulation::new(base_config(), 1);
+            sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
+            for rate in &rates {
+                let mut config = base_config();
+                config.emitter.spawn_rate_while_active = *rate;
+                sim.set_config(config);
+                for _ in 0..60 {
+                    sim.advance(TICK);
+                }
+            }
+
+            let mut valid = base_config();
+            valid.emitter.spawn_rate_while_active = 10.0;
+            sim.set_config(valid);
+            let before = sim.particle_count();
+            sim.advance(TICK);
+            assert_eq!(sim.particle_count(), (before + 10).min(MAX_PARTICLES), "after {rates:?}");
         }
     }
 
@@ -2691,14 +2747,16 @@ mod tests {
     }
 
     /// An infinite speed range makes `Rng::range` return NaN (inf + 0 * (inf - inf)),
-    /// so the spawned particle's position is NaN after its first step.
+    /// so the spawned particle's position is NaN after its first step. Set
+    /// past `Simulation::new`, which would clamp the infinities to 15: the
+    /// cull guard is the last line of defence, for whatever else yields NaN.
     fn nan_runner(margin: Option<f32>) -> Simulation {
         let mut config = base_config();
         config.emitter.spawn_rate_while_active = 1.0;
-        config.initial_speed_min = f32::INFINITY;
-        config.initial_speed_max = f32::INFINITY;
         config.cull_margin = margin;
         let mut sim = Simulation::new(config, 7);
+        sim.config.initial_speed_min = f32::INFINITY;
+        sim.config.initial_speed_max = f32::INFINITY;
         sim.set_bounds(100.0, 100.0).unwrap();
         sim.set_emitter(50.0, 50.0, 0.0, 0.0, true);
         sim.advance(TICK);

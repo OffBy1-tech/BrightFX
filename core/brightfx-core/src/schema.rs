@@ -181,8 +181,13 @@ pub const MAX_EMITTER_TRACK_DURATION: f32 = 600.0;
 pub const MAX_PREROLL: f32 = 60.0;
 
 /// `value` clamped into `min..=max`, with a NaN (which `f32::clamp` passes
-/// through) read as `default`: as if the field had been left out.
-pub(crate) fn clamp_or_default(value: f32, min: f32, max: f32, default: f32) -> f32 {
+/// through) read as `default`: as if the field had been left out. The
+/// infinities are the range's ends. The rule `clamp_to_bounds` applies to
+/// every ranged field, public so generators (`brightfx-tracks`) sanitize
+/// the same way rather than restating it. As with `f32::clamp`, `min` must
+/// be at most `max` and neither may be NaN, or it panics; a NaN `default`
+/// is returned as NaN.
+pub fn clamp_or_default(value: f32, min: f32, max: f32, default: f32) -> f32 {
     if value.is_nan() { default.clamp(min, max) } else { value.clamp(min, max) }
 }
 
@@ -196,10 +201,7 @@ pub(crate) fn clamp_or_default(value: f32, min: f32, max: f32, default: f32) -> 
 /// sanitizing twice changes nothing. Seconds on the grid, such as 0.5 and
 /// 5, come through unchanged.
 pub fn sanitize_preroll(preroll: f32) -> f32 {
-    if preroll.is_nan() {
-        return 0.0;
-    }
-    let steps = crate::simulation::grid_step(preroll.clamp(0.0, MAX_PREROLL));
+    let steps = crate::simulation::grid_step(clamp_or_default(preroll, 0.0, MAX_PREROLL, 0.0));
     (steps as f64 / crate::simulation::GRID_RATE) as f32
 }
 
@@ -345,7 +347,9 @@ impl ParticleFxConfig {
     /// as `JSON.stringify` writes it as `null`), and 0 for a track's
     /// `duration` and a colour stop's `offset`, as the simulation reads them.
     /// Returns the field names that were changed, so a host UI can surface
-    /// a warning.
+    /// a warning. `Simulation::new` and `set_config` apply it too, so a
+    /// config built in code plays as the ABI would play it; call it
+    /// yourself for the report.
     pub fn clamp_to_bounds(&mut self) -> Vec<&'static str> {
         let mut changed = Vec::new();
         // Before the closure below, which holds `changed` until its last use.
@@ -586,22 +590,7 @@ mod tests {
             ("endAlpha", d.end_alpha),
             ("emitterTrack.duration", 0.0),
         ];
-        let nan = f32::NAN;
-        // `preroll` has its own NaN test (and is not written when 0).
-        let mut config = tracked(0.0);
-        config.emitter_track.as_mut().unwrap().duration = nan;
-        let e = &mut config.emitter;
-        (e.spawn_rate_while_active, e.spawn_rate_idle, e.emission_angle, e.emission_spread, e.velocity_inheritance) =
-            (nan, nan, nan, nan, nan);
-        let c = &mut config;
-        (c.glow_radius, c.initial_speed_min, c.initial_speed_max, c.gravity_x, c.gravity_y, c.drag) =
-            (nan, nan, nan, nan, nan, nan);
-        (c.turbulence, c.vortex_attraction, c.rotation_speed_min, c.rotation_speed_max) = (nan, nan, nan, nan);
-        (c.lifetime_min, c.lifetime_max, c.start_size, c.peak_size, c.end_size) = (nan, nan, nan, nan, nan);
-        (c.rainbow_speed, c.start_alpha, c.peak_alpha, c.end_alpha) = (nan, nan, nan, nan);
-        c.cull_margin = Some(nan);
-        c.color_stops = Some(vec![ColorStop { offset: nan, color: "#ffffff".into() }]);
-
+        let mut config = every_field(f32::NAN);
         let changed = config.clamp_to_bounds();
         let json = serde_json::to_value(&config).unwrap();
         for (name, expected) in fields {
@@ -616,6 +605,32 @@ mod tests {
 
         // serde_json writes a surviving NaN as null, so any field this test
         // forgot to list (or a new one) that kept its NaN shows up here.
+        let found = surviving_nans(&json);
+        assert!(found.is_empty(), "still NaN after clamping: {found:?}");
+    }
+
+    /// A tracked config with `value` in every ranged f32, `cullMargin` and
+    /// the one colour stop's offset. `preroll` has its own tests (and is
+    /// not written when 0).
+    fn every_field(v: f32) -> ParticleFxConfig {
+        let mut config = tracked(0.0);
+        config.emitter_track.as_mut().unwrap().duration = v;
+        let e = &mut config.emitter;
+        (e.spawn_rate_while_active, e.spawn_rate_idle, e.emission_angle, e.emission_spread, e.velocity_inheritance) =
+            (v, v, v, v, v);
+        let c = &mut config;
+        (c.glow_radius, c.initial_speed_min, c.initial_speed_max, c.gravity_x, c.gravity_y, c.drag) = (v, v, v, v, v, v);
+        (c.turbulence, c.vortex_attraction, c.rotation_speed_min, c.rotation_speed_max) = (v, v, v, v);
+        (c.lifetime_min, c.lifetime_max, c.start_size, c.peak_size, c.end_size) = (v, v, v, v, v);
+        (c.rainbow_speed, c.start_alpha, c.peak_alpha, c.end_alpha) = (v, v, v, v);
+        c.cull_margin = Some(v);
+        c.color_stops = Some(vec![ColorStop { offset: v, color: "#ffffff".into() }]);
+        config
+    }
+
+    /// The paths serde_json writes as null (a NaN or an infinity), less the
+    /// optional fields a config may leave out (`None` is null too).
+    fn surviving_nans(json: &serde_json::Value) -> Vec<String> {
         fn nulls(v: &serde_json::Value, path: String, out: &mut Vec<String>) {
             match v {
                 serde_json::Value::Null => out.push(path),
@@ -625,10 +640,42 @@ mod tests {
             }
         }
         let mut found = Vec::new();
-        nulls(&json, String::new(), &mut found);
-        // Optional fields the config leaves out.
-        found.retain(|p| ![".author", ".cullMargin", ".soundOnSpawn"].contains(&p.as_str()));
-        assert!(found.is_empty(), "still NaN after clamping: {found:?}");
+        nulls(json, String::new(), &mut found);
+        let optional = [".author", ".colorStops", ".cullMargin", ".emitterTrack", ".soundOnSpawn"];
+        found.retain(|p| !optional.contains(&p.as_str()));
+        found
+    }
+
+    #[test]
+    fn a_simulation_plays_a_config_as_clamp_to_bounds_reads_it() {
+        // A config built in code that skipped `clamp_to_bounds`: NaNs, the
+        // infinities, finite values out of range (a negative drag made every
+        // position NaN), and inverted pairs left by a non-finite min.
+        let mut inverted = ParticleFxConfig::default();
+        (inverted.initial_speed_min, inverted.initial_speed_max) = (f32::INFINITY, 3.0);
+        (inverted.lifetime_min, inverted.lifetime_max) = (f32::NAN, 20.0);
+        let mut preroll = tracked(f32::NAN);
+        preroll.color_stops = Some(vec![ColorStop { offset: f32::NAN, color: "#ffffff".into() }]);
+        let configs = [
+            every_field(f32::NAN),
+            every_field(f32::INFINITY),
+            every_field(f32::NEG_INFINITY),
+            every_field(-1e6),
+            every_field(1e6),
+            inverted,
+            preroll,
+        ];
+        for config in configs {
+            let mut clamped = config.clone();
+            clamped.clamp_to_bounds();
+            let mut sim = crate::Simulation::new(config.clone(), 1);
+            assert_eq!(sim.config(), &clamped, "new");
+            sim.set_config(config);
+            assert_eq!(sim.config(), &clamped, "set_config");
+            // What it holds round-trips through JSON, as a saved file must.
+            let json = serde_json::to_value(sim.config()).unwrap();
+            assert!(surviving_nans(&json).is_empty(), "{:?}", surviving_nans(&json));
+        }
     }
 
     #[test]

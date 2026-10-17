@@ -1,5 +1,5 @@
 use brightfx_core::schema::{EmitterKeyframe, EmitterTrack, EmitterTrigger, TriggerKind};
-use brightfx_core::{sanitize_preroll, MAX_EMITTER_TRACK_DURATION, PLAYBACK_STEP};
+use brightfx_core::{clamp_or_default, sanitize_preroll, MAX_EMITTER_TRACK_DURATION, PLAYBACK_STEP};
 
 /// Shortest sweep period the core can actually play back.
 ///
@@ -48,17 +48,14 @@ pub(crate) fn leg_count(duration: f32, leg: f32) -> usize {
 /// the core clamps it (`0..=MAX_PREROLL`, NaN is 0).
 ///
 /// `period` is floored at [`MIN_SWEEP_PERIOD`] and capped at `f32::MAX`,
-/// and `duration` is sanitized into `0..=MAX_EMITTER_TRACK_DURATION` (a
-/// non-finite duration becomes 0), so the result always loads unclamped.
+/// and `duration` is sanitized as the core sanitizes it (into
+/// `0..=MAX_EMITTER_TRACK_DURATION`, +inf the longest track and NaN 0), so
+/// the result always loads unclamped.
 pub fn sweep_track(a: (f32, f32), b: (f32, f32), period: f32, duration: f32, preroll: f32) -> EmitterTrack {
     // `max` rather than `clamp`, which would keep a NaN period. The
     // infinite one is `legged_track`'s to cap.
     let half = period.max(MIN_SWEEP_PERIOD) / 2.0;
-    let duration = if duration.is_finite() {
-        duration.clamp(0.0, MAX_EMITTER_TRACK_DURATION)
-    } else {
-        0.0
-    };
+    let duration = clamp_or_default(duration, 0.0, MAX_EMITTER_TRACK_DURATION, 0.0);
     legged_track(half, duration, preroll, |_, i| if i.rem_euclid(2) == 0 { a } else { b })
 }
 
@@ -239,13 +236,24 @@ mod tests {
     }
 
     #[test]
-    fn a_non_finite_duration_produces_one_keyframe_and_a_zero_duration() {
-        for bad in [f32::NAN, f32::INFINITY] {
-            let track = sweep_track((0.0, 0.0), (10.0, 0.0), 1.0, bad, 0.0);
-            assert_eq!(track.keyframes.len(), 1, "duration {bad}");
-            assert_eq!(track.keyframes[0].time, 0.0);
-            assert_eq!(track.duration, 0.0);
-        }
+    fn a_nan_duration_produces_one_keyframe_and_a_zero_duration() {
+        let track = sweep_track((0.0, 0.0), (10.0, 0.0), 1.0, f32::NAN, 0.0);
+        assert_eq!(track.keyframes.len(), 1);
+        assert_eq!(track.keyframes[0].time, 0.0);
+        assert_eq!(track.duration, 0.0);
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn an_infinite_duration_is_the_cores_longest_track() {
+        // The core reads a +inf duration as MAX_EMITTER_TRACK_DURATION; this
+        // used to read it as 0.
+        let track = sweep_track((0.0, 0.0), (10.0, 0.0), 1.0, f32::INFINITY, 0.0);
+        let mut config = brightfx_core::ParticleFxConfig::default();
+        config.emitter_track = Some(track.clone());
+        assert!(config.clamp_to_bounds().is_empty());
+        assert_eq!(track.duration, MAX_EMITTER_TRACK_DURATION);
+        assert_eq!(track.keyframes.len(), 1201);
     }
 
     #[test]
