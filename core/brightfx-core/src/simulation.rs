@@ -613,7 +613,10 @@ impl Simulation {
         if self.live.emitter_active {
             self.live.spawn_budget += self.config.emitter.spawn_rate_while_active * fe;
             let count = (self.live.spawn_budget.floor() as i32).clamp(0, 40) as u32;
-            self.live.spawn_budget -= count as f32;
+            // Spawns past the cap are dropped, as `dt` is clamped: carried
+            // over, a run of long steps builds a backlog that outlives the
+            // rate that made it. Below the cap this is the fraction left.
+            self.live.spawn_budget = self.live.spawn_budget.fract();
             for _ in 0..count {
                 self.spawn_particle(false);
             }
@@ -1087,6 +1090,26 @@ mod tests {
         sim.advance(TICK); // fe == 1.0 exactly, so budget == 10.0
 
         assert_eq!(sim.particle_count(), 10);
+    }
+
+    #[test]
+    fn spawns_past_the_per_step_cap_are_dropped_not_carried_over() {
+        // At the longest step (0.1 s, fe = 6) a rate of 20 asks for 120
+        // spawns and the cap allows 40. The other 80 are dropped: carried
+        // over, they would build a backlog that keeps spawning 40 per step
+        // after the rate falls.
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 20.0;
+        let mut sim = Simulation::new(config.clone(), 1);
+        sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
+        sim.advance(MAX_DELTA_SECONDS);
+        sim.advance(MAX_DELTA_SECONDS);
+        assert_eq!(sim.particle_count(), 80);
+
+        config.emitter.spawn_rate_while_active = 1.0;
+        sim.set_config(config);
+        sim.advance(TICK); // fe = 1: the new rate alone fills the budget to 1
+        assert_eq!(sim.particle_count(), 81);
     }
 
     #[test]
