@@ -247,7 +247,11 @@ pub struct Simulation {
 }
 
 impl Simulation {
-    pub fn new(config: ParticleFxConfig, seed: u64) -> Self {
+    /// A NaN or infinite field is read as `clamp_to_bounds` reads it (see
+    /// `ParticleFxConfig::sanitize_non_finite`), and `config()` returns the
+    /// config so read. Finite values are kept as given, in range or not.
+    pub fn new(mut config: ParticleFxConfig, seed: u64) -> Self {
+        config.sanitize_non_finite();
         let mut sim = Self {
             palette: build_palette(&config),
             baked_track: build_baked_track(&config),
@@ -271,8 +275,10 @@ impl Simulation {
     /// Swaps the config. Live particles keep their state, except that the
     /// cull rule is re-applied to them at once, so a smaller `cullMargin`
     /// takes effect without waiting for a step. Any config does this, not
-    /// only one that changes the margin, and the cull is permanent.
-    pub fn set_config(&mut self, config: ParticleFxConfig) {
+    /// only one that changes the margin, and the cull is permanent. Non-finite
+    /// fields are read as `new` reads them.
+    pub fn set_config(&mut self, mut config: ParticleFxConfig) {
+        config.sanitize_non_finite();
         self.palette = build_palette(&config);
         self.baked_track = build_baked_track(&config);
         self.config = config;
@@ -961,11 +967,8 @@ fn build_baked_track(config: &ParticleFxConfig) -> Option<Arc<BakedTrack>> {
 
     // `clamp_to_bounds` enforces these ranges for well-behaved hosts, but
     // `Simulation` can be built directly from unvalidated JSON, so the
-    // ceilings must hold regardless. `max`/`min` rather than `clamp`: a
-    // NaN duration must collapse to 0.0 here, and `clamp` would
-    // propagate it.
-    #[allow(clippy::manual_clamp)]
-    let duration_cap = track.duration.max(0.0).min(MAX_EMITTER_TRACK_DURATION);
+    // ceilings must hold regardless.
+    let duration_cap = clamp_or_default(track.duration, 0.0, MAX_EMITTER_TRACK_DURATION, 0.0);
     let preroll = sanitize_preroll(track.preroll);
     let preroll_steps = grid_step(preroll);
 
@@ -1190,6 +1193,43 @@ mod tests {
                 assert!(channel.is_finite(), "non-finite color channel: {:?}", p.color);
             }
         }
+    }
+
+    #[test]
+    fn a_nan_drag_from_a_config_that_skipped_clamping_leaves_positions_finite() {
+        let mut config = base_config();
+        config.emitter.spawn_burst_size = 5;
+        config.drag = f32::NAN;
+        let mut sim = Simulation::new(config, 1);
+        assert_eq!(sim.config().drag, ParticleFxConfig::default().drag);
+
+        sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
+        sim.trigger_burst();
+        for _ in 0..10 {
+            sim.advance(TICK);
+        }
+        assert!(sim.particle_count() > 0);
+        for p in sim.buffer() {
+            assert!(p.x.is_finite() && p.y.is_finite(), "non-finite position: {p:?}");
+        }
+    }
+
+    #[test]
+    fn a_nan_spawn_rate_does_not_leave_a_nan_budget_for_the_next_config() {
+        // A NaN rate used to make the spawn budget NaN, and `set_config`
+        // keeps the budget, so a valid config afterwards never spawned.
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = f32::NAN;
+        let mut sim = Simulation::new(config, 1);
+        sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
+        sim.advance(TICK);
+
+        let mut valid = base_config();
+        valid.emitter.spawn_rate_while_active = 10.0;
+        sim.set_config(valid);
+        let before = sim.particle_count();
+        sim.advance(TICK);
+        assert_eq!(sim.particle_count(), before + 10);
     }
 
     #[test]
@@ -2691,14 +2731,16 @@ mod tests {
     }
 
     /// An infinite speed range makes `Rng::range` return NaN (inf + 0 * (inf - inf)),
-    /// so the spawned particle's position is NaN after its first step.
+    /// so the spawned particle's position is NaN after its first step. Set
+    /// past `Simulation::new`, which would read the infinities as 15: the
+    /// cull guard is the last line of defence, for whatever else yields NaN.
     fn nan_runner(margin: Option<f32>) -> Simulation {
         let mut config = base_config();
         config.emitter.spawn_rate_while_active = 1.0;
-        config.initial_speed_min = f32::INFINITY;
-        config.initial_speed_max = f32::INFINITY;
         config.cull_margin = margin;
         let mut sim = Simulation::new(config, 7);
+        sim.config.initial_speed_min = f32::INFINITY;
+        sim.config.initial_speed_max = f32::INFINITY;
         sim.set_bounds(100.0, 100.0).unwrap();
         sim.set_emitter(50.0, 50.0, 0.0, 0.0, true);
         sim.advance(TICK);
