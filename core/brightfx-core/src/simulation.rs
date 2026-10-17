@@ -612,8 +612,14 @@ impl Simulation {
 
         if self.live.emitter_active {
             self.live.spawn_budget += self.config.emitter.spawn_rate_while_active * fe;
-            let count = (self.live.spawn_budget.floor() as i32).clamp(0, 40) as u32;
-            self.live.spawn_budget -= count as f32;
+            // Every whole spawn asked for is made, so a long step emits as
+            // many as the same time at 60 Hz, and only the fraction carries.
+            // Mouseflare capped this at 40 per step, which lost spawns on
+            // steps past ~34 ms and, carried over, built a backlog. Past the
+            // pool a spawn only evicts this step's own, so that is the bound.
+            let wanted = self.live.spawn_budget.floor();
+            self.live.spawn_budget -= wanted;
+            let count = wanted.clamp(0.0, MAX_PARTICLES as f32) as u32;
             for _ in 0..count {
                 self.spawn_particle(false);
             }
@@ -1087,6 +1093,54 @@ mod tests {
         sim.advance(TICK); // fe == 1.0 exactly, so budget == 10.0
 
         assert_eq!(sim.particle_count(), 10);
+    }
+
+    #[test]
+    fn long_steps_spawn_at_the_configured_rate_and_leave_no_backlog() {
+        // At the longest step (0.1 s, fe = 6) the schema's top rate of 20
+        // asks for 120 spawns, and all 120 come. A fixed per-step cap of 40
+        // used to spawn 40 and carry the other 80, so the next 1/60 s tick
+        // spent the backlog (40) instead of the rate (20).
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 20.0;
+        let mut sim = Simulation::new(config, 1);
+        sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
+        sim.advance(MAX_DELTA_SECONDS);
+        sim.advance(MAX_DELTA_SECONDS);
+        assert_eq!(sim.particle_count(), 2 * 120);
+
+        sim.advance(TICK);
+        assert_eq!(sim.particle_count(), 2 * 120 + 20);
+    }
+
+    #[test]
+    fn the_fraction_of_a_spawn_carries_across_long_steps() {
+        // 6.9 * fe 6 = 41.4 per step: 41, 41 (41.8), 42 (42.2).
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 6.9;
+        let mut sim = Simulation::new(config, 1);
+        sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
+        for _ in 0..3 {
+            sim.advance(MAX_DELTA_SECONDS);
+        }
+        assert_eq!(sim.particle_count(), 41 + 41 + 42);
+    }
+
+    #[test]
+    fn short_steps_keep_the_rate() {
+        // fe 0.1 at rate 2 is 0.2 per step: a spawn every 5th step, so 600
+        // steps (60 frame-equivalents) make 120 -- give or take one to f32
+        // rounding in the running sum.
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 2.0;
+        config.lifetime_min = 1000.0;
+        config.lifetime_max = 1000.0;
+        let mut sim = Simulation::new(config, 1);
+        sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
+        for _ in 0..600 {
+            sim.advance(TICK / 10.0);
+        }
+        assert!((119..=120).contains(&sim.particle_count()), "{}", sim.particle_count());
     }
 
     #[test]
