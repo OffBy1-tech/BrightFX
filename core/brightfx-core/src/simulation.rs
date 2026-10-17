@@ -13,10 +13,14 @@ use std::sync::Arc;
 /// `step` converts a wall-clock `dt` (seconds) into frame-equivalents (`fe`)
 /// before applying it. `dt` is clamped so a stall can't teleport or
 /// mass-expire particles.
-/// A `dt` past one frame is run as several steps of at most a frame (see
-/// `Simulation::advance`), so no step has `fe > 1`.
+/// A `dt` past `MAX_STEP_FE` frames is run as several equal steps (see
+/// `Simulation::advance`), so no step has `fe > MAX_STEP_FE`.
 const REFERENCE_HZ: f32 = 60.0;
 const MAX_DELTA_SECONDS: f32 = 0.1;
+/// The longest step `advance` runs, in frame-equivalents. 10% past one
+/// frame, so a 60 Hz frame that jitters past 16.667 ms is still one step
+/// rather than two half-steps.
+const MAX_STEP_FE: f32 = 1.1;
 /// Fixed step size used when replaying an `EmitterTrack` in `seek`, so that
 /// scrubbing to the same time always reproduces the same buffer. Public so
 /// track generators (`brightfx-tracks`) derive their own limits from it
@@ -405,14 +409,15 @@ impl Simulation {
     }
 
     /// Advances by `dt` seconds, clamped to `0..=0.1` so a stall can't
-    /// teleport or mass-expire particles. A `dt` longer than one 60 Hz
-    /// frame runs as `ceil(fe)` equal steps of at most a frame each, so
-    /// spawns spread over the frame's ages and the physics matches 60 Hz.
+    /// teleport or mass-expire particles. A `dt` longer than 1.1 60 Hz
+    /// frames runs as `ceil(fe / 1.1)` equal steps of at most 1.1 frames
+    /// each, so spawns spread over the frame's ages and the physics matches
+    /// 60 Hz.
     /// The emitter stays where `set_emitter` put it for every step.
     pub fn advance(&mut self, dt: f32) {
         self.leave_baked();
         let fe = dt.max(0.0).min(MAX_DELTA_SECONDS) * REFERENCE_HZ;
-        let steps = fe.ceil().max(1.0);
+        let steps = (fe / MAX_STEP_FE).ceil().max(1.0);
         for _ in 0..steps as u32 {
             self.step(fe / steps);
         }
@@ -616,10 +621,10 @@ impl Simulation {
         }
     }
 
-    /// One step of `fe` frame-equivalents, at most 1. Does not rebuild the
-    /// buffer: `advance` and `seek` rebuild once after their steps.
+    /// One step of `fe` frame-equivalents, at most `MAX_STEP_FE`. Does not
+    /// rebuild the buffer: `advance` and `seek` rebuild once after their steps.
     fn step(&mut self, fe: f32) {
-
+        debug_assert!(fe <= MAX_STEP_FE, "step takes at most MAX_STEP_FE frame-equivalents, got {fe}");
         if self.live.emitter_active {
             self.live.spawn_budget += self.config.emitter.spawn_rate_while_active * fe;
             // Every whole spawn asked for is made, so a long step emits as
@@ -1164,6 +1169,37 @@ mod tests {
         ages.dedup();
         assert_eq!(ages, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
         assert_eq!(sim.particle_count(), 120);
+    }
+
+    #[test]
+    fn a_frame_a_little_past_one_is_one_step_and_longer_ones_split_evenly() {
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 20.0;
+
+        // fe 1.05 is one step: every particle has aged the whole step.
+        let mut sim = Simulation::new(config.clone(), 1);
+        sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
+        sim.advance(1.05 / 60.0);
+        assert_eq!(sim.particle_count(), 21);
+        for p in sim.live.pool.iter() {
+            assert!((p.life - 1.05).abs() < 1e-4, "{}", p.life);
+        }
+
+        // fe 2.5 is three equal steps of ~0.8333; the ages are 3, 2, 1 of them.
+        let mut sim = Simulation::new(config, 1);
+        sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
+        sim.advance(2.5 / 60.0);
+        let mut ages: Vec<f32> = sim.live.pool.iter().map(|p| p.life).collect();
+        ages.sort_by(f32::total_cmp);
+        ages.dedup_by(|a, b| (*a - *b).abs() < 1e-4);
+        let h = 2.5 / 3.0;
+        assert_eq!(ages.len(), 3, "{ages:?}");
+        for (age, k) in ages.iter().zip([1.0, 2.0, 3.0]) {
+            assert!((age - k * h).abs() < 1e-4, "{ages:?}");
+        }
+        // 20 * 2.5 = 50 asked for; the running f32 sum of three 16.67s can
+        // land a hair under 50, so the last spawn may carry to the next call.
+        assert!((49..=50).contains(&sim.particle_count()), "{}", sim.particle_count());
     }
 
     #[test]
