@@ -10,9 +10,9 @@ use std::sync::Arc;
 
 /// Presets store lifetimes/speeds/gravity/drag/turbulence in 60fps
 /// frame-equivalent units (matching Mouseflare's `customFxRenderer.ts`), so
-/// `step` converts a wall-clock `dt` (seconds) into frame-equivalents (`fe`)
-/// before applying it. `dt` is clamped so a stall can't teleport or
-/// mass-expire particles.
+/// `advance` converts a wall-clock `dt` (seconds) into frame-equivalents
+/// (`fe`) before `step` applies it. `advance` clamps `dt` so a stall can't
+/// teleport or mass-expire particles.
 /// A `dt` past `MAX_STEP_FE` frames is run as several equal steps (see
 /// `Simulation::advance`), so no step has `fe > MAX_STEP_FE`.
 const REFERENCE_HZ: f32 = 60.0;
@@ -411,8 +411,8 @@ impl Simulation {
     /// Advances by `dt` seconds, clamped to `0..=0.1` so a stall can't
     /// teleport or mass-expire particles. A `dt` longer than 1.1 60 Hz
     /// frames runs as `ceil(fe / 1.1)` equal steps of at most 1.1 frames
-    /// each, so spawns spread over the frame's ages and the physics matches
-    /// 60 Hz.
+    /// each (`MAX_STEP_FE`), so spawns spread over the frame's ages and the
+    /// physics approximates 60 Hz.
     /// The emitter stays where `set_emitter` put it for every step.
     pub fn advance(&mut self, dt: f32) {
         self.leave_baked();
@@ -641,7 +641,9 @@ impl Simulation {
         } else if self.config.emitter.spawn_rate_idle > 0.0
             // `rate * 0.3` per frame, saturating at 1, scaled to the
             // step: `fe <= MAX_STEP_FE` (see `advance`). At fe 1 this is
-            // the draw Mouseflare made once per 60 Hz frame.
+            // the draw Mouseflare made once per 60 Hz frame. A step between
+            // 1 and 1.1 frames still draws once (probability capped at
+            // fe), so saturated idle is up to 10% short there.
             && self.live.rng.f32() < (self.config.emitter.spawn_rate_idle * 0.3).min(1.0) * fe
         {
             self.spawn_particle(false);
@@ -1207,7 +1209,7 @@ mod tests {
 
     #[test]
     fn the_fraction_of_a_spawn_carries_across_long_steps() {
-        // 6.9 * fe 6 = 41.4 per step: 41, 41 (41.8), 42 (42.2).
+        // 6.9 * fe 6 = 41.4 per advance (six steps of 6.9): 41, 41 (41.8), 42 (42.2).
         let mut config = base_config();
         config.emitter.spawn_rate_while_active = 6.9;
         let mut sim = Simulation::new(config, 1);
@@ -1281,8 +1283,57 @@ mod tests {
         // Rate 5 asks for 1.5 per frame and gets 1. At fe 0.5 that is one
         // every other step, about 100 in 200 steps; a per-step draw gave 200.
         let half = idle_count(5.0, 0.5, 200);
-        assert!((80..=120).contains(&half), "fe 0.5: {half}");
+        assert!((70..=130).contains(&half), "fe 0.5: {half}");
         assert_eq!(idle_count(5.0, 1.0, 100), 100, "fe 1: every step");
+    }
+
+    #[test]
+    fn saturated_idle_at_a_step_just_over_one_frame_is_one_spawn_per_step() {
+        // fe 1.09 is a single step (under MAX_STEP_FE) and the draw
+        // threshold is min(1.5, 1) * 1.09 > 1, so it always spawns.
+        assert_eq!(idle_count(5.0, 1.09, 50), 50);
+    }
+
+    #[test]
+    fn advance_zero_spawns_no_idle_particles() {
+        // Changed with #48: advance(0) used to spawn one idle particle per
+        // call; the draw is now scaled by fe, which is 0.
+        assert_eq!(idle_count(5.0, 0.0, 50), 0);
+    }
+
+    /// Cull-test config: fast particles leaving a 200x200 frame.
+    fn culling_config(margin: Option<f32>) -> ParticleFxConfig {
+        let mut config = busy_config();
+        config.cull_margin = margin;
+        config.initial_speed_min = 10.0;
+        config.initial_speed_max = 15.0;
+        config
+    }
+
+    /// Run `advance(3/60)` against three 1/60 advances, `rounds` times, on
+    /// a 200x200 frame. Returns both sims.
+    fn cull_pair(margin: Option<f32>, rounds: usize) -> (Simulation, Simulation) {
+        let mut long = Simulation::new(culling_config(margin), 7);
+        let mut short = Simulation::new(culling_config(margin), 7);
+        for sim in [&mut long, &mut short] {
+            sim.set_bounds(200.0, 200.0).unwrap();
+            sim.set_emitter(100.0, 100.0, 0.0, 0.0, true);
+        }
+        for _ in 0..rounds {
+            long.advance(3.0 / 60.0);
+            advance_steps(&mut short, 3);
+        }
+        (long, short)
+    }
+
+    #[test]
+    fn sub_stepping_with_culling_matches_sixtieths() {
+        let (long, short) = cull_pair(Some(0.0), 40);
+        assert_eq!(long.particle_count(), short.particle_count());
+        assert_eq!(long.buffer(), short.buffer());
+        // Culling really happened: the uncull run keeps strictly more.
+        let (uncull, _) = cull_pair(None, 40);
+        assert!(long.particle_count() < uncull.particle_count());
     }
 
     #[test]

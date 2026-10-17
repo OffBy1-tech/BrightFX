@@ -321,7 +321,8 @@ impl ParticleFxConfig {
     /// `clamp_to_bounds`; the config is not changed.
     pub fn pool_warnings(&self) -> Vec<String> {
         // Idle emission is `rate * 0.3` particles per frame-equivalent,
-        // at most one (see `Simulation::step`), at any host refresh rate.
+        // at most one (see `Simulation::step`), at any host refresh rate
+        // (a step of 1 to 1.1 frames draws once, so up to 10% short).
         let idle = (self.emitter.spawn_rate_idle * 0.3).min(1.0);
         let rate = self.emitter.spawn_rate_while_active.max(idle);
         let peak = rate * self.lifetime_max + self.emitter.spawn_burst_size as f32;
