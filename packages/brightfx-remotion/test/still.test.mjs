@@ -49,7 +49,10 @@ function range(id, from, to, { scale = 1 } = {}) {
     ["remotion", "render", "--config=test/remotion.config.ts", "test/src/index.ts", id, dir, "--sequence", "--image-format=png", `--frames=${from}-${to}`, "--concurrency=1", `--scale=${scale}`, "--log=verbose"],
     { cwd: pkg, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
   );
-  const log = `${run.stdout}${run.stderr}`;
+  // Without colour codes: Remotion colours its log when it detects a CI
+  // (GITHUB_ACTIONS, say) even with output piped, and the closing code
+  // would sit between the JSON and the end of the line.
+  const log = `${run.stdout}${run.stderr}`.replace(/\x1b\[[0-9;]*m/g, "");
   assert.equal(run.status, 0, `remotion render ${id} failed:\n${log}`);
   const calls = [...log.matchAll(new RegExp(`${shared.callLogTag} (\\{.*\\})$`, "gm"))].map((m) => JSON.parse(m[1]));
   const files = readdirSync(dir).filter((f) => f.endsWith(".png")).sort();
