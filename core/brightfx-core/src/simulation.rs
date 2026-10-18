@@ -10,11 +10,17 @@ use std::sync::Arc;
 
 /// Presets store lifetimes/speeds/gravity/drag/turbulence in 60fps
 /// frame-equivalent units (matching Mouseflare's `customFxRenderer.ts`), so
-/// `step` converts a wall-clock `dt` (seconds) into frame-equivalents (`fe`)
-/// before applying it. `dt` is clamped so a stall can't teleport or
-/// mass-expire particles.
+/// `advance` converts a wall-clock `dt` (seconds) into frame-equivalents
+/// (`fe`) before `step` applies it. `advance` clamps `dt` so a stall can't
+/// teleport or mass-expire particles.
+/// A `dt` past `MAX_STEP_FE` frames is run as several equal steps (see
+/// `Simulation::advance`), so no step has `fe > MAX_STEP_FE`.
 const REFERENCE_HZ: f32 = 60.0;
 const MAX_DELTA_SECONDS: f32 = 0.1;
+/// The longest step `advance` runs, in frame-equivalents. 10% past one
+/// frame, so a 60 Hz frame that jitters past 16.667 ms is still one step
+/// rather than two half-steps.
+const MAX_STEP_FE: f32 = 1.1;
 /// Fixed step size used when replaying an `EmitterTrack` in `seek`, so that
 /// scrubbing to the same time always reproduces the same buffer. Public so
 /// track generators (`brightfx-tracks`) derive their own limits from it
@@ -402,9 +408,20 @@ impl Simulation {
         self.rebuild_buffer();
     }
 
+    /// Advances by `dt` seconds, clamped to `0..=0.1` so a stall can't
+    /// teleport or mass-expire particles. A `dt` longer than 1.1 60 Hz
+    /// frames runs as `ceil(fe / 1.1)` equal steps of at most 1.1 frames
+    /// each (`MAX_STEP_FE`), so spawns spread over the frame's ages and the
+    /// physics approximates 60 Hz.
+    /// The emitter stays where `set_emitter` put it for every step.
     pub fn advance(&mut self, dt: f32) {
         self.leave_baked();
-        self.step(dt);
+        let fe = dt.max(0.0).min(MAX_DELTA_SECONDS) * REFERENCE_HZ;
+        let steps = (fe / MAX_STEP_FE).ceil().max(1.0);
+        for _ in 0..steps as u32 {
+            self.step(fe / steps);
+        }
+        self.rebuild_buffer();
     }
 
     pub fn buffer(&self) -> &[ParticleInstance] {
@@ -520,7 +537,7 @@ impl Simulation {
         // `leave_baked` first, so a cursor can only survive a pure replay.
         let from = match self.baked {
             Some(step) if step <= n => step,
-            _ => self.restart_track(&track, n),
+            _ => self.restart_track(&track),
         };
 
         for k in from..n {
@@ -545,7 +562,7 @@ impl Simulation {
 
             self.fire_triggers(&track, k + 1);
 
-            self.step(PLAYBACK_STEP);
+            self.step(PLAYBACK_STEP * REFERENCE_HZ);
 
             if k + 1 == track.preroll_steps && !self.preroll_saved {
                 if let Some(store) = self.preroll_store.as_mut() {
@@ -555,6 +572,10 @@ impl Simulation {
             }
         }
 
+        // Steps don't rebuild the buffer, so it is built once here: from
+        // the replayed state, or unchanged state on a forward seek that
+        // ran no steps.
+        self.rebuild_buffer();
         self.baked = Some(n);
     }
 
@@ -569,18 +590,12 @@ impl Simulation {
     /// one: every seek target is at or past it, and that state is what the
     /// steps it skips would have produced. The copy overwrites every field
     /// a reset would, so there is no reset first. Returns the step the
-    /// replay continues from; `n` is the step it runs to.
-    fn restart_track(&mut self, track: &BakedTrack, n: u32) -> u32 {
+    /// replay continues from.
+    fn restart_track(&mut self, track: &BakedTrack) -> u32 {
         if self.preroll_saved {
             self.leave_baked();
             if let Some(saved) = &self.preroll_store {
                 self.live.copy_from(saved);
-                // Every step ends by rebuilding the buffer, so only a
-                // replay that runs none (a seek to t=0) rebuilds it here:
-                // as the last pre-roll step left it.
-                if n == track.preroll_steps {
-                    self.rebuild_buffer();
-                }
                 return track.preroll_steps;
             }
         }
@@ -606,10 +621,10 @@ impl Simulation {
         }
     }
 
-    fn step(&mut self, dt: f32) {
-        let seconds = dt.max(0.0).min(MAX_DELTA_SECONDS);
-        let fe = seconds * REFERENCE_HZ;
-
+    /// One step of `fe` frame-equivalents, at most `MAX_STEP_FE`. Does not
+    /// rebuild the buffer: `advance` and `seek` rebuild once after their steps.
+    fn step(&mut self, fe: f32) {
+        debug_assert!(fe <= MAX_STEP_FE, "step takes at most MAX_STEP_FE frame-equivalents, got {fe}");
         if self.live.emitter_active {
             self.live.spawn_budget += self.config.emitter.spawn_rate_while_active * fe;
             // Every whole spawn asked for is made, so a long step emits as
@@ -624,7 +639,12 @@ impl Simulation {
                 self.spawn_particle(false);
             }
         } else if self.config.emitter.spawn_rate_idle > 0.0
-            && self.live.rng.f32() < self.config.emitter.spawn_rate_idle * 0.3
+            // `rate * 0.3` per frame, saturating at 1, scaled to the
+            // step: `fe <= MAX_STEP_FE` (see `advance`). At fe 1 this is
+            // the draw Mouseflare made once per 60 Hz frame. A step between
+            // 1 and 1.1 frames still draws once (probability capped at
+            // fe), so saturated idle is up to 10% short there.
+            && self.live.rng.f32() < (self.config.emitter.spawn_rate_idle * 0.3).min(1.0) * fe
         {
             self.spawn_particle(false);
         }
@@ -689,8 +709,6 @@ impl Simulation {
 
             true
         });
-
-        self.rebuild_buffer();
     }
 
     fn spawn_particle(&mut self, is_burst: bool) {
@@ -1113,9 +1131,85 @@ mod tests {
         assert_eq!(sim.particle_count(), 2 * 120 + 20);
     }
 
+    /// Exercises every per-step term, so a sub-step that differed from a
+    /// 1/60 s step anywhere would show in the buffer.
+    fn busy_config() -> ParticleFxConfig {
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 20.0;
+        config.emitter.emission_spread = 360.0;
+        config.initial_speed_min = 2.0;
+        config.initial_speed_max = 6.0;
+        config.gravity_y = 1.0;
+        config.drag = 0.98;
+        config.turbulence = 2.0;
+        config.vortex_attraction = 0.5;
+        config.rotation_speed_max = 0.2;
+        config
+    }
+
+    #[test]
+    fn a_long_advance_matches_the_same_time_in_sixtieths() {
+        let mut long = Simulation::new(busy_config(), 7);
+        let mut short = Simulation::new(busy_config(), 7);
+        long.set_emitter(100.0, 100.0, 0.0, 0.0, true);
+        short.set_emitter(100.0, 100.0, 0.0, 0.0, true);
+        for _ in 0..4 {
+            long.advance(3.0 / 60.0); // fe 3.0: three steps of fe 1.0
+            advance_steps(&mut short, 3);
+        }
+        assert_eq!(long.particle_count(), short.particle_count());
+        assert_eq!(long.buffer(), short.buffer());
+    }
+
+    #[test]
+    fn a_long_advance_spreads_spawn_ages_over_the_frame() {
+        // fe 6 is six steps; the 20 spawned in step k have aged 7 - k.
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 20.0;
+        let mut sim = Simulation::new(config, 1);
+        sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
+        sim.advance(MAX_DELTA_SECONDS);
+        let mut ages: Vec<f32> = sim.live.pool.iter().map(|p| p.life).collect();
+        ages.sort_by(f32::total_cmp);
+        ages.dedup();
+        assert_eq!(ages, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(sim.particle_count(), 120);
+    }
+
+    #[test]
+    fn a_frame_a_little_past_one_is_one_step_and_longer_ones_split_evenly() {
+        let mut config = base_config();
+        config.emitter.spawn_rate_while_active = 20.0;
+
+        // fe 1.05 is one step: every particle has aged the whole step.
+        let mut sim = Simulation::new(config.clone(), 1);
+        sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
+        sim.advance(1.05 / 60.0);
+        assert_eq!(sim.particle_count(), 21);
+        for p in sim.live.pool.iter() {
+            assert!((p.life - 1.05).abs() < 1e-4, "{}", p.life);
+        }
+
+        // fe 2.5 is three equal steps of ~0.8333; the ages are 3, 2, 1 of them.
+        let mut sim = Simulation::new(config, 1);
+        sim.set_emitter(0.0, 0.0, 0.0, 0.0, true);
+        sim.advance(2.5 / 60.0);
+        let mut ages: Vec<f32> = sim.live.pool.iter().map(|p| p.life).collect();
+        ages.sort_by(f32::total_cmp);
+        ages.dedup_by(|a, b| (*a - *b).abs() < 1e-4);
+        let h = 2.5 / 3.0;
+        assert_eq!(ages.len(), 3, "{ages:?}");
+        for (age, k) in ages.iter().zip([1.0, 2.0, 3.0]) {
+            assert!((age - k * h).abs() < 1e-4, "{ages:?}");
+        }
+        // 20 * 2.5 = 50 asked for; the running f32 sum of three 16.67s can
+        // land a hair under 50, so the last spawn may carry to the next call.
+        assert!((49..=50).contains(&sim.particle_count()), "{}", sim.particle_count());
+    }
+
     #[test]
     fn the_fraction_of_a_spawn_carries_across_long_steps() {
-        // 6.9 * fe 6 = 41.4 per step: 41, 41 (41.8), 42 (42.2).
+        // 6.9 * fe 6 = 41.4 per advance (six steps of 6.9): 41, 41 (41.8), 42 (42.2).
         let mut config = base_config();
         config.emitter.spawn_rate_while_active = 6.9;
         let mut sim = Simulation::new(config, 1);
@@ -1155,6 +1249,91 @@ mod tests {
         sim.advance(TICK);
 
         assert_eq!(sim.particle_count(), 1);
+    }
+
+    /// Live particles after `steps` advances of `fe` frame-equivalents each,
+    /// with the emitter idle. Lifetimes are at the schema's 300 ceiling so
+    /// nothing expires inside the 250 fe these tests run.
+    fn idle_count(rate: f32, fe: f32, steps: usize) -> usize {
+        let mut config = base_config();
+        config.emitter.spawn_rate_idle = rate;
+        config.lifetime_min = 300.0;
+        config.lifetime_max = 300.0;
+        let mut sim = Simulation::new(config, 11);
+        sim.set_emitter(0.0, 0.0, 0.0, 0.0, false);
+        for _ in 0..steps {
+            sim.advance(fe / 60.0);
+        }
+        sim.particle_count()
+    }
+
+    #[test]
+    fn idle_emission_is_a_rate_per_frame_not_per_step() {
+        // Rate 1 is 0.3 per frame. 250 fe at fe 0.4 (a 144 Hz-like host)
+        // expects 75, as 250 steps at fe 1 do; a per-step draw gave ~188.
+        // The band is about 3 standard deviations either side.
+        let fast = idle_count(1.0, 0.4, 625);
+        assert!((50..=100).contains(&fast), "fe 0.4: {fast}");
+        let sixty = idle_count(1.0, 1.0, 250);
+        assert!((50..=100).contains(&sixty), "fe 1: {sixty}");
+    }
+
+    #[test]
+    fn saturated_idle_emission_is_one_per_frame_at_any_rate() {
+        // Rate 5 asks for 1.5 per frame and gets 1. At fe 0.5 that is one
+        // every other step, about 100 in 200 steps; a per-step draw gave 200.
+        let half = idle_count(5.0, 0.5, 200);
+        assert!((70..=130).contains(&half), "fe 0.5: {half}");
+        assert_eq!(idle_count(5.0, 1.0, 100), 100, "fe 1: every step");
+    }
+
+    #[test]
+    fn saturated_idle_at_a_step_just_over_one_frame_is_one_spawn_per_step() {
+        // fe 1.09 is a single step (under MAX_STEP_FE) and the draw
+        // threshold is min(1.5, 1) * 1.09 > 1, so it always spawns.
+        assert_eq!(idle_count(5.0, 1.09, 50), 50);
+    }
+
+    #[test]
+    fn advance_zero_spawns_no_idle_particles() {
+        // Changed with #48: advance(0) used to spawn one idle particle per
+        // call; the draw is now scaled by fe, which is 0.
+        assert_eq!(idle_count(5.0, 0.0, 50), 0);
+    }
+
+    /// Cull-test config: fast particles leaving a 200x200 frame.
+    fn culling_config(margin: Option<f32>) -> ParticleFxConfig {
+        let mut config = busy_config();
+        config.cull_margin = margin;
+        config.initial_speed_min = 10.0;
+        config.initial_speed_max = 15.0;
+        config
+    }
+
+    /// Run `advance(3/60)` against three 1/60 advances, `rounds` times, on
+    /// a 200x200 frame. Returns both sims.
+    fn cull_pair(margin: Option<f32>, rounds: usize) -> (Simulation, Simulation) {
+        let mut long = Simulation::new(culling_config(margin), 7);
+        let mut short = Simulation::new(culling_config(margin), 7);
+        for sim in [&mut long, &mut short] {
+            sim.set_bounds(200.0, 200.0).unwrap();
+            sim.set_emitter(100.0, 100.0, 0.0, 0.0, true);
+        }
+        for _ in 0..rounds {
+            long.advance(3.0 / 60.0);
+            advance_steps(&mut short, 3);
+        }
+        (long, short)
+    }
+
+    #[test]
+    fn sub_stepping_with_culling_matches_sixtieths() {
+        let (long, short) = cull_pair(Some(0.0), 40);
+        assert_eq!(long.particle_count(), short.particle_count());
+        assert_eq!(long.buffer(), short.buffer());
+        // Culling really happened: the uncull run keeps strictly more.
+        let (uncull, _) = cull_pair(None, 40);
+        assert!(long.particle_count() < uncull.particle_count());
     }
 
     #[test]
