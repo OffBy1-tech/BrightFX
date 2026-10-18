@@ -21,7 +21,7 @@ const burstOnceEffect = withTriggers(shared.burstOnceTriggers);
 // write rather than React state: the sim loads asynchronously and
 // re-renders only the component, so a sibling reading a counter would miss
 // it. Compositions without the markers are unaffected.
-const PROBE_METHODS = { raster: ["render", "frame"], seek: ["seek"], bounds: ["setBounds"] } as const;
+const PROBE_METHODS = { raster: ["render", "frame"], seek: ["seek"] } as const;
 const proto = Simulation.prototype as unknown as Record<string, (...args: unknown[]) => unknown>;
 for (const [probe, methods] of Object.entries(PROBE_METHODS)) {
   for (const method of methods) {
@@ -34,21 +34,19 @@ for (const [probe, methods] of Object.entries(PROBE_METHODS)) {
   }
 }
 
-// setBounds also records what it was given, as the colour of the
-// boundsArgs marker: red is the width and green the height, rounded and
-// clamped to a byte; blue is lit only if both were numbers in 0..255, so
-// NaN or a missing argument cannot pass for 0. The last call wins.
-const inByte = (n: unknown): n is number => typeof n === "number" && n >= 0 && n <= 255;
-const byte = (n: unknown) => (inByte(n) ? Math.round(n) : typeof n === "number" && n > 255 ? 255 : 0);
-const probedSetBounds = proto.setBounds;
-proto.setBounds = function (this: Simulation, ...args: unknown[]) {
-  const marker = document.getElementById("probe-boundsArgs");
-  if (marker) {
-    marker.style.display = "block";
-    marker.style.background = `rgb(${byte(args[0])},${byte(args[1])},${inByte(args[0]) && inByte(args[1]) ? 255 : 0})`;
-  }
-  return probedSetBounds.apply(this, args);
-};
+// Every setBounds and setViewport call is also logged, with its arguments
+// and the page's devicePixelRatio, as one `shared.callLogTag` line that
+// `remotion render --log=verbose` forwards to the test (`remotion still`
+// does not forward the render tab's console). Each call is kept, not just
+// the last, since each one replays the track from preroll. JSON.stringify
+// writes NaN as null, so a NaN size cannot pass for a number.
+for (const method of ["setBounds", "setViewport"]) {
+  const original = proto[method];
+  proto[method] = function (this: Simulation, ...args: unknown[]) {
+    console.log(`${shared.callLogTag} ${JSON.stringify({ method, args, dpr: window.devicePixelRatio })}`);
+    return original.apply(this, args);
+  };
+}
 
 const Probes: React.FC = () => (
   <>
@@ -173,6 +171,19 @@ const ViewportNaNBoundsTest: React.FC = () => (
   <HookTest viewport={{ width: 200, height: 120 }} bounds={{ width: NaN, height: NaN }} />
 );
 
+// A host whose measured size arrives late: 0 before frame 30, then a
+// size past 255 in both directions. The simulation built for 0 must be
+// replaced, not kept.
+const GrowingBoundsTest: React.FC = () => {
+  const frame = useCurrentFrame();
+  return <HookTest viewport={null} bounds={frame < 30 ? { width: 0, height: 0 } : { width: 640, height: 360 }} />;
+};
+// The same for a viewport, which is rebuilt by its own dependencies.
+const GrowingViewportTest: React.FC = () => {
+  const frame = useCurrentFrame();
+  return <HookTest viewport={frame < 30 ? { width: 100, height: 60 } : { width: 640, height: 360 }} bounds={null} />;
+};
+
 const size = { fps: 30, width: 200, height: 120 };
 
 export const Root: React.FC = () => (
@@ -186,5 +197,7 @@ export const Root: React.FC = () => (
     <Composition id="ModeSwitchTest" component={ModeSwitchTest} durationInFrames={60} {...size} />
     <Composition id="ZeroBoundsTest" component={ZeroBoundsTest} durationInFrames={60} {...size} />
     <Composition id="ViewportNaNBoundsTest" component={ViewportNaNBoundsTest} durationInFrames={60} {...size} />
+    <Composition id="GrowingBoundsTest" component={GrowingBoundsTest} durationInFrames={60} {...size} />
+    <Composition id="GrowingViewportTest" component={GrowingViewportTest} durationInFrames={60} {...size} />
   </>
 );
