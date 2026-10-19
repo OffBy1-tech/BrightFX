@@ -31,29 +31,48 @@ function wrap(method: string, before: (sim: Simulation, args: unknown[]) => void
   };
 }
 
-const PROBE_METHODS = { raster: ["render", "frame"], seek: ["seek"] } as const;
-for (const [probe, methods] of Object.entries(PROBE_METHODS)) {
-  for (const method of methods) {
-    wrap(method, () => {
-      const marker = document.getElementById(`probe-${probe}`);
-      if (marker) marker.style.display = "block";
+// One console line, `tag` then JSON, read back by the test through
+// renderFrames' onBrowserLog. JSON.stringify writes NaN, ±Infinity and
+// undefined all as null, so those are written as strings instead and stay
+// distinct, from each other and from a null that means "none".
+const log = (tag: string, data: unknown) =>
+  console.log(
+    `${tag} ${JSON.stringify(data, (_, v) => (v === undefined || (typeof v === "number" && !Number.isFinite(v)) ? String(v) : v))}`,
+  );
+
+// The patches are made once per page. Fast Refresh re-runs this module in
+// Remotion Studio, and wrapping the methods again would log each call once
+// per run; the WeakMap lives on the prototype so the re-run module reads the
+// one the first run's wrappers write. The page line marks a fresh page, so
+// the test can tell a tab Remotion replaced mid-render.
+const patched = Simulation.prototype as unknown as { __bfxSizedWith?: WeakMap<Simulation, unknown[]> };
+const firstRun = patched.__bfxSizedWith == null;
+// The last setBounds/setViewport arguments per simulation, for HookTest's use log.
+const sizedWith = (patched.__bfxSizedWith ??= new WeakMap());
+
+if (firstRun) {
+  log(shared.pageLogTag, { href: window.location.href });
+
+  const PROBE_METHODS = { raster: ["render", "frame"], seek: ["seek"] } as const;
+  for (const [probe, methods] of Object.entries(PROBE_METHODS)) {
+    for (const method of methods) {
+      wrap(method, () => {
+        const marker = document.getElementById(`probe-${probe}`);
+        if (marker) marker.style.display = "block";
+      });
+    }
+  }
+
+  // Every setBounds and setViewport call is logged, with its arguments and
+  // the page's devicePixelRatio, as one `shared.callLogTag` line. Each call
+  // is kept, not just the last, since each one replays the track from
+  // preroll.
+  for (const method of ["setBounds", "setViewport"]) {
+    wrap(method, (sim, args) => {
+      log(shared.callLogTag, { method, args, dpr: window.devicePixelRatio });
+      sizedWith.set(sim, args);
     });
   }
-}
-
-// Every setBounds and setViewport call is also logged, with its arguments
-// and the page's devicePixelRatio, as one `shared.callLogTag` line that
-// `remotion render --log=verbose` forwards to the test (`remotion still`
-// does not forward the render tab's console). Each call is kept, not just
-// the last, since each one replays the track from preroll. JSON.stringify
-// writes NaN as null, so a NaN size cannot pass for a number. The last
-// call's arguments are also kept per simulation, for HookTest's use log.
-const sizedWith = new WeakMap<Simulation, unknown[]>();
-for (const method of ["setBounds", "setViewport"]) {
-  wrap(method, (sim, args) => {
-    console.log(`${shared.callLogTag} ${JSON.stringify({ method, args, dpr: window.devicePixelRatio })}`);
-    sizedWith.set(sim, args);
-  });
 }
 
 const Probes: React.FC = () => (
@@ -136,12 +155,15 @@ const HookTest: React.FC<{
 }> = ({ viewport, bounds }) => {
   const frame = useCurrentFrame();
   const sim = useBrightFX(effect, 42, WASM, viewport, bounds);
-  if (sim) console.log(`${shared.useLogTag} ${JSON.stringify({ frame, args: sizedWith.get(sim) ?? null })}`);
+  if (sim) log(shared.useLogTag, { frame, args: sizedWith.get(sim) ?? null });
   return null;
 };
 
 // A container measured before layout: rejected, warned about, not fatal.
 const ZeroBoundsTest: React.FC = () => <HookTest viewport={null} bounds={{ width: 0, height: 0 }} />;
+// Without a viewport a NaN bounds reaches setBounds, is rejected, and the
+// hook must still match the simulation built for it.
+const NaNBoundsTest: React.FC = () => <HookTest viewport={null} bounds={{ width: NaN, height: NaN }} />;
 // Bounds are ignored beside a viewport, so a NaN there must not matter.
 const ViewportNaNBoundsTest: React.FC = () => (
   <HookTest viewport={{ width: 200, height: 120 }} bounds={{ width: NaN, height: NaN }} />
@@ -181,6 +203,7 @@ export const Root: React.FC = () => (
     <Composition id="BurstRangeTest" component={BurstRangeTest} durationInFrames={60} {...size} />
     <Composition id="ModeSwitchTest" component={ModeSwitchTest} durationInFrames={60} {...size} />
     <Composition id="ZeroBoundsTest" component={ZeroBoundsTest} durationInFrames={60} {...size} />
+    <Composition id="NaNBoundsTest" component={NaNBoundsTest} durationInFrames={60} {...size} />
     <Composition id="ViewportNaNBoundsTest" component={ViewportNaNBoundsTest} durationInFrames={60} {...size} />
     <Composition id="GrowingBoundsTest" component={GrowingBoundsTest} durationInFrames={60} {...size} />
     <Composition id="GrowingViewportTest" component={GrowingViewportTest} durationInFrames={60} {...size} />
