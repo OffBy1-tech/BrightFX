@@ -21,16 +21,23 @@ const burstOnceEffect = withTriggers(shared.burstOnceTriggers);
 // write rather than React state: the sim loads asynchronously and
 // re-renders only the component, so a sibling reading a counter would miss
 // it. Compositions without the markers are unaffected.
-const PROBE_METHODS = { raster: ["render", "frame"], seek: ["seek"] } as const;
 const proto = Simulation.prototype as unknown as Record<string, (...args: unknown[]) => unknown>;
+// Runs `before` with each call's simulation and arguments, then the method.
+function wrap(method: string, before: (sim: Simulation, args: unknown[]) => void) {
+  const original = proto[method];
+  proto[method] = function (this: Simulation, ...args: unknown[]) {
+    before(this, args);
+    return original.apply(this, args);
+  };
+}
+
+const PROBE_METHODS = { raster: ["render", "frame"], seek: ["seek"] } as const;
 for (const [probe, methods] of Object.entries(PROBE_METHODS)) {
   for (const method of methods) {
-    const original = proto[method];
-    proto[method] = function (this: Simulation, ...args: unknown[]) {
+    wrap(method, () => {
       const marker = document.getElementById(`probe-${probe}`);
       if (marker) marker.style.display = "block";
-      return original.apply(this, args);
-    };
+    });
   }
 }
 
@@ -43,12 +50,10 @@ for (const [probe, methods] of Object.entries(PROBE_METHODS)) {
 // call's arguments are also kept per simulation, for HookTest's use log.
 const sizedWith = new WeakMap<Simulation, unknown[]>();
 for (const method of ["setBounds", "setViewport"]) {
-  const original = proto[method];
-  proto[method] = function (this: Simulation, ...args: unknown[]) {
+  wrap(method, (sim, args) => {
     console.log(`${shared.callLogTag} ${JSON.stringify({ method, args, dpr: window.devicePixelRatio })}`);
-    sizedWith.set(this, args);
-    return original.apply(this, args);
-  };
+    sizedWith.set(sim, args);
+  });
 }
 
 const Probes: React.FC = () => (
@@ -89,19 +94,6 @@ const SpriteModeTest: React.FC = () => (
   />
 );
 
-const SpriteBoundsTest: React.FC = () => (
-  <>
-    <BrightFX
-      effect={effect}
-      seed={42}
-      mode="sprite"
-      wasmSrc={WASM}
-      render={() => <div style={{ width: 4, height: 4, background: "#ff0000" }} />}
-    />
-    <Probes />
-  </>
-);
-
 const EmptyFrameTest: React.FC = () => (
   <>
     <BrightFX effect={lateEffect} seed={42} mode="frame" wasmSrc={WASM} />
@@ -135,10 +127,9 @@ const ModeSwitchTest: React.FC = () => {
   );
 };
 
-// Calls the hook directly with the given viewport and bounds, and reveals
-// the "loaded" probe once it returns a simulation. Each render that gets a
-// simulation also logs, as a `shared.useLogTag` line, the frame and the
-// size that simulation was built with, so a stale one shows.
+// Calls the hook directly with the given viewport and bounds. Each render
+// that gets a simulation logs, as a `shared.useLogTag` line, the frame and
+// the size that simulation was built with, so a stale one shows.
 const HookTest: React.FC<{
   viewport: { width: number; height: number } | null;
   bounds: { width: number; height: number } | null;
@@ -146,29 +137,7 @@ const HookTest: React.FC<{
   const frame = useCurrentFrame();
   const sim = useBrightFX(effect, 42, WASM, viewport, bounds);
   if (sim) console.log(`${shared.useLogTag} ${JSON.stringify({ frame, args: sizedWith.get(sim) ?? null })}`);
-  return (
-    <>
-      <Probes />
-      {sim && <LoadedMarker />}
-    </>
-  );
-};
-
-const LoadedMarker: React.FC = () => {
-  const { right, color } = shared.probes.loaded;
-  return (
-    <div
-      style={{
-        position: "absolute",
-        right,
-        bottom: 0,
-        width: shared.probeSize,
-        height: shared.probeSize,
-        background: `rgb(${color.join(",")})`,
-        zIndex: 1,
-      }}
-    />
-  );
+  return null;
 };
 
 // A container measured before layout: rejected, warned about, not fatal.
@@ -207,7 +176,6 @@ export const Root: React.FC = () => (
   <>
     <Composition id="FrameModeTest" component={FrameModeTest} durationInFrames={60} {...size} />
     <Composition id="SpriteModeTest" component={SpriteModeTest} durationInFrames={60} {...size} />
-    <Composition id="SpriteBoundsTest" component={SpriteBoundsTest} durationInFrames={60} {...size} />
     <Composition id="EmptyFrameTest" component={EmptyFrameTest} durationInFrames={60} {...size} />
     <Composition id="PastTrackEndTest" component={PastTrackEndTest} durationInFrames={90} {...size} />
     <Composition id="BurstRangeTest" component={BurstRangeTest} durationInFrames={60} {...size} />

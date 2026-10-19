@@ -71,6 +71,10 @@ function range(id, from, to, { scale = 1, logged = false } = {}) {
       0,
       `remotion render ${id} failed (error: ${run.error ?? "none"}, signal: ${run.signal ?? "none"}):\n${result.output}`,
     );
+    // A tab Remotion replaces after a crash remounts the composition and
+    // sizes a new simulation, which the exact-count checks would blame on
+    // the hook.
+    assert.doesNotMatch(result.output, /retrying/i, `${id}: Remotion retried a frame in a new tab, so the call log is not one mount's`);
     result.calls = loggedJson(stdout, shared.callLogTag);
     result.uses = loggedJson(stdout, shared.useLogTag);
     // Every logged composition sizes a simulation; none logged means the
@@ -93,14 +97,22 @@ function loggedJson(log, tag) {
   return log
     .split("\n")
     .filter((line) => line.includes(marker))
-    .map((line) => JSON.parse(line.slice(line.indexOf(marker) + marker.length)));
+    .map((line) => {
+      try {
+        return JSON.parse(line.slice(line.indexOf(marker) + marker.length));
+      } catch (error) {
+        throw new Error(`unparsable ${tag} line: ${line}`, { cause: error });
+      }
+    });
 }
 
-// The calls' method and sizes, without the devicePixelRatio. A setViewport
-// that leaves out its scale reads as passing the default of 1; any scale
-// that was passed, including a NaN logged as null, is compared as it is.
-const sizing = (calls) =>
-  calls.map(({ method, args }) => ({ method, args: method === "setViewport" && args.length === 2 ? [...args, 1] : args }));
+// A sizing call's arguments as compared. A setViewport that leaves out its
+// scale reads as passing the default of 1; any scale that was passed,
+// including a NaN logged as null, is compared as it is. Null args (a
+// simulation never sized) stay null.
+const sizeArgs = (method, args) => (method === "setViewport" && args?.length === 2 ? [...args, 1] : args);
+// The calls' method and sizes, without the devicePixelRatio.
+const sizing = (calls) => calls.map(({ method, args }) => ({ method, args: sizeArgs(method, args) }));
 
 const painted = (png) => {
   let n = 0;
@@ -258,11 +270,12 @@ test("switching from sprite to frame mode mid-render draws the frame-mode frame"
 test("sprite mode gives the simulation the composition's bounds, once", () => {
   // With W and H distinct, a swapped size shows up here.
   assert.ok(W !== H, `test is vacuous: ${W}x${H} cannot show a swap`);
-  const { calls } = range("SpriteBoundsTest", FRAME, FRAME + 1, { scale: 2, logged: true });
+  const { calls } = range("SpriteModeTest", FRAME, FRAME + 1, { scale: 2, logged: true });
   assert.deepEqual(sizing(calls), [{ method: "setBounds", args: [W, H] }]);
 });
 
 test("frame mode leaves the bounds to setViewport", () => {
+  // That this composition rasterizes is the first test's check.
   const { calls } = range("FrameModeTest", FRAME, FRAME + 1, { scale: 2, logged: true });
   assert.deepEqual(sizing(calls), [{ method: "setViewport", args: [W, H, 1] }]);
 });
@@ -271,16 +284,16 @@ test("a rejected bounds size is passed on, warned about, and does not cancel the
   // A host measuring a container before layout passes 0. It must reach
   // setBounds (not be mistaken for "no bounds") and must not abort the
   // render: the next layout pass brings the real size.
-  const { frames, calls, output } = range("ZeroBoundsTest", FRAME, FRAME + 1, { logged: true });
+  const { calls, uses, output } = range("ZeroBoundsTest", FRAME, FRAME + 1, { logged: true });
   assert.deepEqual(sizing(calls), [{ method: "setBounds", args: [0, 0] }]);
   assert.match(output, /BrightFX bounds rejected/, "the rejected size was not warned about");
-  assert.ok(probeShown(frames[0], "loaded"), "the hook never returned a simulation");
+  assert.ok(uses.length > 0, "the hook never returned a simulation");
 });
 
 test("bounds ignored beside a viewport cannot keep the hook from loading", () => {
-  const { frames, calls } = range("ViewportNaNBoundsTest", FRAME, FRAME + 1, { logged: true });
-  assert.ok(probeShown(frames[0], "loaded"), "a NaN bounds next to a viewport left the hook returning null");
-  assert.deepEqual(sizing(calls), [{ method: "setViewport", args: [W, H, 1] }], "setBounds ran although a viewport was given");
+  const { calls, uses } = range("ViewportNaNBoundsTest", FRAME, FRAME + 1, { logged: true });
+  assert.ok(uses.length > 0, "a NaN bounds next to a viewport left the hook returning null");
+  assert.deepEqual(sizing(calls), [{ method: "setViewport", args: [W, H, 1] }]);
 });
 
 test("a size that changes mid-render rebuilds the simulation for the new one", async (t) => {
@@ -298,7 +311,7 @@ test("a size that changes mid-render rebuilds the simulation for the new one", a
       const { calls, uses } = range(id, switchFrame - 2, switchFrame + 2, { scale: 2, logged: true });
       assert.deepEqual(sizing(calls), [{ method, args: first }, { method, args: second }]);
       for (let f = switchFrame - 2; f <= switchFrame + 2; f++) {
-        const got = uses.filter((u) => u.frame === f).map((u) => sizing([{ method, args: u.args }])[0].args);
+        const got = uses.filter((u) => u.frame === f).map((u) => sizeArgs(method, u.args));
         assert.ok(got.length > 0, `frame ${f} has no simulation`);
         assert.deepEqual(got, got.map(() => (f < switchFrame ? first : second)), `frame ${f} used a simulation of the wrong size`);
       }
