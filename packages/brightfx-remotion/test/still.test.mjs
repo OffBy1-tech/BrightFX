@@ -8,6 +8,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 import { PNG } from "pngjs";
 import { BrightFX } from "brightfx-js";
 
@@ -37,31 +38,53 @@ function still(id, frame = FRAME) {
 
 // Frames `from..to` rendered in one tab, one after another, so the
 // component stays mounted across them the way it does in a real render.
-// Returns the frames and every setBounds/setViewport call made while
-// rendering them, in order (see the call log in test/src/Root.tsx), read
-// from the browser console that --log=verbose forwards. `scale` is
-// Remotion's --scale, which sets the page's devicePixelRatio.
-function range(id, from, to, { scale = 1 } = {}) {
+// `scale` is Remotion's --scale, which sets the page's devicePixelRatio.
+//
+// With `logged`, the render runs at --log=verbose, which forwards the
+// browser console, and also returns every setBounds/setViewport call made
+// while rendering, in order (see the call log in test/src/Root.tsx), and
+// the console warnings. Remotion writes console.log to stdout and
+// console.warn to stderr, so calls are read from stdout alone and keep
+// their order. NO_COLOR, because Remotion colours its log when it detects
+// a CI (GITHUB_ACTIONS, say) even with output piped.
+function range(id, from, to, { scale = 1, logged = false } = {}) {
   const dir = join(out, scale === 1 ? id : `${id}@${scale}x`);
   rmSync(dir, { recursive: true, force: true });
-  const run = spawnSync(
-    "npx",
-    ["remotion", "render", "--config=test/remotion.config.ts", "test/src/index.ts", id, dir, "--sequence", "--image-format=png", `--frames=${from}-${to}`, "--concurrency=1", `--scale=${scale}`, "--log=verbose"],
-    { cwd: pkg, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-  );
-  // Without colour codes: Remotion colours its log when it detects a CI
-  // (GITHUB_ACTIONS, say) even with output piped, and the closing code
-  // would sit between the JSON and the end of the line.
-  const log = `${run.stdout}${run.stderr}`.replace(/\x1b\[[0-9;]*m/g, "");
-  assert.equal(run.status, 0, `remotion render ${id} failed:\n${log}`);
-  const calls = [...log.matchAll(new RegExp(`${shared.callLogTag} (\\{.*\\})$`, "gm"))].map((m) => JSON.parse(m[1]));
+  const args = ["remotion", "render", "--config=test/remotion.config.ts", "test/src/index.ts", id, dir, "--sequence", "--image-format=png", `--frames=${from}-${to}`, "--concurrency=1", `--scale=${scale}`];
+  let calls = [];
+  let warnings = "";
+  if (!logged) {
+    execFileSync("npx", [...args, "--log=error"], { cwd: pkg, stdio: "inherit" });
+  } else {
+    const run = spawnSync("npx", [...args, "--log=verbose"], {
+      cwd: pkg,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      env: { ...process.env, NO_COLOR: "1" },
+    });
+    const stdout = stripVTControlCharacters(run.stdout ?? "");
+    warnings = stripVTControlCharacters(run.stderr ?? "");
+    assert.equal(
+      run.status,
+      0,
+      `remotion render ${id} failed (error: ${run.error ?? "none"}, signal: ${run.signal ?? "none"}):\n${stdout}${warnings}`,
+    );
+    const marker = `${shared.callLogTag} `;
+    calls = stdout
+      .split("\n")
+      .filter((line) => line.includes(marker))
+      .map((line) => JSON.parse(line.slice(line.indexOf(marker) + marker.length)));
+  }
   const files = readdirSync(dir).filter((f) => f.endsWith(".png")).sort();
   assert.equal(files.length, to - from + 1, `expected ${to - from + 1} frames, got ${files.length}`);
-  return { frames: files.map((f) => PNG.sync.read(readFileSync(join(dir, f)))), calls };
+  return { frames: files.map((f) => PNG.sync.read(readFileSync(join(dir, f)))), calls, warnings };
 }
 
-// The calls' method and arguments, without the devicePixelRatio.
-const sizing = (calls) => calls.map(({ method, args }) => ({ method, args }));
+// The calls' method and sizes, without the devicePixelRatio. setViewport's
+// scale defaults to 1, so a call that leaves it out reads the same as one
+// that passes 1.
+const sizing = (calls) =>
+  calls.map(({ method, args }) => ({ method, args: method === "setViewport" ? [args[0], args[1], args[2] ?? 1] : args }));
 
 const painted = (png) => {
   let n = 0;
@@ -199,7 +222,7 @@ test("switching from sprite to frame mode mid-render draws the frame-mode frame"
   // switch frame starts out holding the sprite-mode simulation.
   const from = 25;
   const to = 35;
-  const { frames, calls } = range("ModeSwitchTest", from, to);
+  const { frames, calls } = range("ModeSwitchTest", from, to, { logged: true });
   frames.forEach((png, i) => assert.ok(painted(png) > 0, `frame ${from + i} drew nothing`));
   assert.deepEqual(sizing(calls), [
     { method: "setBounds", args: [W, H] },
@@ -211,48 +234,40 @@ test("switching from sprite to frame mode mid-render draws the frame-mode frame"
   }
 });
 
+// The once-only checks run at --scale=2, where the page's
+// devicePixelRatio is 2: the simulation works in the composition's own
+// units either way, so these also catch a size scaled to device pixels.
 test("sprite mode gives the simulation the composition's bounds, once", () => {
   // With W and H distinct, a swapped size shows up here.
   assert.ok(W !== H, `test is vacuous: ${W}x${H} cannot show a swap`);
-  const { calls } = range("SpriteBoundsTest", FRAME, FRAME + 1);
+  const { calls } = range("SpriteBoundsTest", FRAME, FRAME + 1, { scale: 2, logged: true });
+  assert.ok(calls.length > 0 && calls.every((c) => c.dpr === 2), `test is vacuous: devicePixelRatio was ${calls.map((c) => c.dpr)}`);
   assert.deepEqual(sizing(calls), [{ method: "setBounds", args: [W, H] }]);
 });
 
 test("frame mode leaves the bounds to setViewport", () => {
-  const { frames, calls } = range("FrameModeTest", FRAME, FRAME + 1);
-  assert.ok(probeShown(frames[0], "raster"), "the frame never rasterized, so this proves nothing");
+  const { calls } = range("FrameModeTest", FRAME, FRAME + 1, { scale: 2, logged: true });
+  assert.ok(calls.length > 0 && calls.every((c) => c.dpr === 2), `test is vacuous: devicePixelRatio was ${calls.map((c) => c.dpr)}`);
   assert.deepEqual(sizing(calls), [{ method: "setViewport", args: [W, H, 1] }]);
-});
-
-test("the sizes are the composition's, not its device pixels", () => {
-  // At --scale=2 the page's devicePixelRatio is 2; the simulation works
-  // in the composition's own units either way.
-  for (const [id, expected] of [
-    ["SpriteBoundsTest", { method: "setBounds", args: [W, H] }],
-    ["FrameModeTest", { method: "setViewport", args: [W, H, 1] }],
-  ]) {
-    const { calls } = range(id, FRAME, FRAME, { scale: 2 });
-    assert.ok(calls.length > 0 && calls.every((c) => c.dpr === 2), `${id}: test is vacuous, devicePixelRatio was ${calls.map((c) => c.dpr)}`);
-    assert.deepEqual(sizing(calls), [expected], id);
-  }
 });
 
 test("a rejected bounds size is passed on, warned about, and does not cancel the render", () => {
   // A host measuring a container before layout passes 0. It must reach
   // setBounds (not be mistaken for "no bounds") and must not abort the
   // render: the next layout pass brings the real size.
-  const { frames, calls } = range("ZeroBoundsTest", FRAME, FRAME);
+  const { frames, calls, warnings } = range("ZeroBoundsTest", FRAME, FRAME + 1, { logged: true });
   assert.deepEqual(sizing(calls), [{ method: "setBounds", args: [0, 0] }]);
+  assert.match(warnings, /BrightFX bounds rejected/, "the rejected size was not warned about");
   assert.ok(probeShown(frames[0], "loaded"), "the hook never returned a simulation");
 });
 
 test("bounds ignored beside a viewport cannot keep the hook from loading", () => {
-  const { frames, calls } = range("ViewportNaNBoundsTest", FRAME, FRAME);
+  const { frames, calls } = range("ViewportNaNBoundsTest", FRAME, FRAME + 1, { logged: true });
   assert.ok(probeShown(frames[0], "loaded"), "a NaN bounds next to a viewport left the hook returning null");
   assert.deepEqual(sizing(calls), [{ method: "setViewport", args: [W, H, 1] }], "setBounds ran although a viewport was given");
 });
 
-test("a size that changes mid-render rebuilds the simulation for the new one", () => {
+test("a size that changes mid-render rebuilds the simulation for the new one", async (t) => {
   // Bounds 0x0 before frame 30, 640x360 from it; a viewport 100x60, then
   // 640x360. The simulation built for the first size must be replaced,
   // once, and the hook must return the new one.
@@ -260,8 +275,10 @@ test("a size that changes mid-render rebuilds the simulation for the new one", (
     ["GrowingBoundsTest", "setBounds", [0, 0], [640, 360]],
     ["GrowingViewportTest", "setViewport", [100, 60, 1], [640, 360, 1]],
   ]) {
-    const { frames, calls } = range(id, FRAME - 2, FRAME + 2);
-    assert.deepEqual(sizing(calls), [{ method, args: first }, { method, args: second }], id);
-    frames.forEach((png, i) => assert.ok(probeShown(png, "loaded"), `${id}: frame ${FRAME - 2 + i} has no simulation`));
+    await t.test(id, () => {
+      const { frames, calls } = range(id, FRAME - 2, FRAME + 2, { logged: true });
+      assert.deepEqual(sizing(calls), [{ method, args: first }, { method, args: second }]);
+      frames.forEach((png, i) => assert.ok(probeShown(png, "loaded"), `frame ${FRAME - 2 + i} has no simulation`));
+    });
   }
 });
