@@ -39,11 +39,14 @@ for (const [probe, methods] of Object.entries(PROBE_METHODS)) {
 // `remotion render --log=verbose` forwards to the test (`remotion still`
 // does not forward the render tab's console). Each call is kept, not just
 // the last, since each one replays the track from preroll. JSON.stringify
-// writes NaN as null, so a NaN size cannot pass for a number.
+// writes NaN as null, so a NaN size cannot pass for a number. The last
+// call's arguments are also kept per simulation, for HookTest's use log.
+const sizedWith = new WeakMap<Simulation, unknown[]>();
 for (const method of ["setBounds", "setViewport"]) {
   const original = proto[method];
   proto[method] = function (this: Simulation, ...args: unknown[]) {
     console.log(`${shared.callLogTag} ${JSON.stringify({ method, args, dpr: window.devicePixelRatio })}`);
+    sizedWith.set(this, args);
     return original.apply(this, args);
   };
 }
@@ -116,16 +119,16 @@ const PastTrackEndTest: React.FC = () => (
 
 const BurstRangeTest: React.FC = () => <BrightFX effect={burstOnceEffect} seed={42} mode="frame" wasmSrc={WASM} />;
 
-// Sprite mode until frame 30, frame mode from it, with particles live
-// across the switch: the first frame-mode render must not draw with the
-// sprite-mode simulation, which has no viewport.
+// Sprite mode until the switch frame, frame mode from it, with particles
+// live across the switch: the first frame-mode render must not draw with
+// the sprite-mode simulation, which has no viewport.
 const ModeSwitchTest: React.FC = () => {
   const frame = useCurrentFrame();
   return (
     <BrightFX
       effect={effect}
       seed={42}
-      mode={frame < 30 ? "sprite" : "frame"}
+      mode={frame < shared.switchFrame ? "sprite" : "frame"}
       wasmSrc={WASM}
       render={() => <div style={{ width: 4, height: 4, background: "#ff0000" }} />}
     />
@@ -133,12 +136,16 @@ const ModeSwitchTest: React.FC = () => {
 };
 
 // Calls the hook directly with the given viewport and bounds, and reveals
-// the "loaded" probe once it returns a simulation.
+// the "loaded" probe once it returns a simulation. Each render that gets a
+// simulation also logs, as a `shared.useLogTag` line, the frame and the
+// size that simulation was built with, so a stale one shows.
 const HookTest: React.FC<{
   viewport: { width: number; height: number } | null;
   bounds: { width: number; height: number } | null;
 }> = ({ viewport, bounds }) => {
+  const frame = useCurrentFrame();
   const sim = useBrightFX(effect, 42, WASM, viewport, bounds);
+  if (sim) console.log(`${shared.useLogTag} ${JSON.stringify({ frame, args: sizedWith.get(sim) ?? null })}`);
   return (
     <>
       <Probes />
@@ -171,17 +178,27 @@ const ViewportNaNBoundsTest: React.FC = () => (
   <HookTest viewport={{ width: 200, height: 120 }} bounds={{ width: NaN, height: NaN }} />
 );
 
-// A host whose measured size arrives late: 0 before frame 30, then a
-// size past 255 in both directions. The simulation built for 0 must be
+// A host whose measured size arrives late: 0 before the switch frame, then
+// larger than the composition. The simulation built for 0 must be
 // replaced, not kept.
 const GrowingBoundsTest: React.FC = () => {
   const frame = useCurrentFrame();
-  return <HookTest viewport={null} bounds={frame < 30 ? { width: 0, height: 0 } : { width: 640, height: 360 }} />;
+  return (
+    <HookTest
+      viewport={null}
+      bounds={frame < shared.switchFrame ? { width: 0, height: 0 } : { width: 640, height: 360 }}
+    />
+  );
 };
 // The same for a viewport, which is rebuilt by its own dependencies.
 const GrowingViewportTest: React.FC = () => {
   const frame = useCurrentFrame();
-  return <HookTest viewport={frame < 30 ? { width: 100, height: 60 } : { width: 640, height: 360 }} bounds={null} />;
+  return (
+    <HookTest
+      viewport={frame < shared.switchFrame ? { width: 100, height: 60 } : { width: 640, height: 360 }}
+      bounds={null}
+    />
+  );
 };
 
 const size = { fps: 30, width: 200, height: 120 };
