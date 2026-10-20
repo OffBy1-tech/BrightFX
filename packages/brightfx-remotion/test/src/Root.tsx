@@ -1,9 +1,9 @@
 import React from "react";
 import { Composition, staticFile, useCurrentFrame } from "remotion";
-import { Simulation } from "brightfx-js";
 import { BrightFX, useBrightFX } from "../../src/index";
 import seekConfig from "../../../../core/fixtures/ffi-seek.config.json";
 import shared from "../fixtures/probe-effects.json";
+import { log, sizedWith } from "./probes";
 
 const WASM = staticFile("brightfx_wasm_bg.wasm");
 type Effect = React.ComponentProps<typeof BrightFX>["effect"];
@@ -17,64 +17,7 @@ const lateEffect = withTriggers(shared.lateStartTriggers);
 // One burst at 0.5 s and nothing after, so its particles all die mid-range.
 const burstOnceEffect = withTriggers(shared.burstOnceTriggers);
 
-// Each probe is a marker revealed when its Simulation method runs. A DOM
-// write rather than React state: the sim loads asynchronously and
-// re-renders only the component, so a sibling reading a counter would miss
-// it. Compositions without the markers are unaffected.
-const proto = Simulation.prototype as unknown as Record<string, (...args: unknown[]) => unknown>;
-// Runs `before` with each call's simulation and arguments, then the method.
-function wrap(method: string, before: (sim: Simulation, args: unknown[]) => void) {
-  const original = proto[method];
-  proto[method] = function (this: Simulation, ...args: unknown[]) {
-    before(this, args);
-    return original.apply(this, args);
-  };
-}
-
-// One console line, `tag` then JSON, read back by the test through
-// renderFrames' onBrowserLog. JSON.stringify writes NaN, ±Infinity and
-// undefined all as null, so those are written as strings instead and stay
-// distinct, from each other and from a null that means "none".
-const log = (tag: string, data: unknown) =>
-  console.log(
-    `${tag} ${JSON.stringify(data, (_, v) => (v === undefined || (typeof v === "number" && !Number.isFinite(v)) ? String(v) : v))}`,
-  );
-
-// The patches are made once per page. Fast Refresh re-runs this module in
-// Remotion Studio, and wrapping the methods again would log each call once
-// per run; the WeakMap lives on the prototype so the re-run module reads the
-// one the first run's wrappers write. The page line marks a fresh page, so
-// the test can tell a tab Remotion replaced mid-render.
-const patched = Simulation.prototype as unknown as { __bfxSizedWith?: WeakMap<Simulation, unknown[]> };
-const firstRun = patched.__bfxSizedWith == null;
-// The last setBounds/setViewport arguments per simulation, for HookTest's use log.
-const sizedWith = (patched.__bfxSizedWith ??= new WeakMap());
-
-if (firstRun) {
-  log(shared.pageLogTag, { href: window.location.href });
-
-  const PROBE_METHODS = { raster: ["render", "frame"], seek: ["seek"] } as const;
-  for (const [probe, methods] of Object.entries(PROBE_METHODS)) {
-    for (const method of methods) {
-      wrap(method, () => {
-        const marker = document.getElementById(`probe-${probe}`);
-        if (marker) marker.style.display = "block";
-      });
-    }
-  }
-
-  // Every setBounds and setViewport call is logged, with its arguments and
-  // the page's devicePixelRatio, as one `shared.callLogTag` line. Each call
-  // is kept, not just the last, since each one replays the track from
-  // preroll.
-  for (const method of ["setBounds", "setViewport"]) {
-    wrap(method, (sim, args) => {
-      log(shared.callLogTag, { method, args, dpr: window.devicePixelRatio });
-      sizedWith.set(sim, args);
-    });
-  }
-}
-
+// The markers test/src/probes.ts reveals.
 const Probes: React.FC = () => (
   <>
     {Object.entries(shared.probes).map(([name, { right, color }]) => (

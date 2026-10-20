@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import util from "node:util";
 import { bundle } from "@remotion/bundler";
 import { getCompositions, openBrowser, renderFrames } from "@remotion/renderer";
 import { PNG } from "pngjs";
@@ -25,28 +26,60 @@ const W = 200;
 const H = 120;
 const SEED = 42;
 
-// The compositions are bundled once and rendered in one browser, each
-// render in its own tab. Bundling in-process hands over the tab's console
-// as it was logged, rather than as the CLI formats and routes it.
-const serveUrl = await bundle({ entryPoint: join(here, "src", "index.ts"), rootDir: pkg, webpackOverride });
-const browser = await openBrowser("chrome", { logLevel: "error" });
-after(() => browser.close({ silent: true }));
+// Remotion resolves its project root and its Chrome download cache from
+// the cwd, so run from the package wherever the test was started from.
+process.chdir(pkg);
+
+// A browser that Remotion closes is reopened on the next request. On a tab
+// crash Remotion closes the browser it was handed and renders on in one of
+// its own; without this, every render after the crash would fail on the
+// closed browser, not just the one that crashed.
+let browser = null;
+async function liveBrowser() {
+  if (!browser) {
+    const opened = await openBrowser("chrome", { logLevel: "error" });
+    const forget = () => {
+      if (browser === opened) browser = null;
+    };
+    opened.once("closed", forget);
+    opened.once("closed-silent", forget);
+    browser = opened;
+  }
+  return browser;
+}
+after(() => browser?.close({ silent: true }));
+
+// The compositions are bundled once, into the gitignored test/out, and
+// rendered in one browser, each render in its own tab. Bundling in-process
+// hands over the tab's console as it was logged, rather than as the CLI
+// formats and routes it.
+const [serveUrl] = await Promise.all([
+  bundle({ entryPoint: join(here, "src", "index.ts"), rootDir: pkg, outDir: join(here, "out", "bundle"), webpackOverride }),
+  liveBrowser(),
+]);
 const compositions = new Map(
-  (await getCompositions(serveUrl, { puppeteerInstance: browser, logLevel: "error" })).map((c) => [c.id, c]),
+  (await getCompositions(serveUrl, { puppeteerInstance: await liveBrowser(), logLevel: "error" })).map((c) => [c.id, c]),
 );
 
 // Frames `from..to` rendered in one tab, one after another, so the
 // component stays mounted across them the way it does in a real render.
 // `scale` is Remotion's scale, which sets the page's devicePixelRatio.
+// With `pixels: false` no frame is captured, for a test that reads only
+// the logs.
 //
 // Returns, in order, every setBounds/setViewport call made while rendering
 // (`calls`), HookTest's record of the size of each simulation it got
-// (`uses`), and the tab's whole console output (`output`). `frames` decodes
-// the PNGs when first read, and only at scale 1: the probe helpers assume
-// W x H. Remotion prints each of the tab's console lines itself as it
-// arrives, whatever the logLevel, so a passing render still shows its
-// warnings.
-async function render(id, from, to = from, { scale = 1 } = {}) {
+// (`uses`), and the tab's whole console output (`output`). Reading `calls`
+// checks that there are some, at the page's devicePixelRatio; `frames`
+// decodes the PNGs when first read, and only at scale 1: the probe helpers
+// assume W x H.
+//
+// Remotion itself prints each console line it can trace to the bundle
+// through its source map, at that line's own level whatever the logLevel,
+// so a passing run shows the tag lines and the tab's warnings too. The
+// public renderFrames has no option to turn that off.
+async function render(id, from, to, { scale = 1, pixels = true } = {}) {
+  assert.ok(Number.isInteger(from) && Number.isInteger(to) && to >= from, `bad frame range ${from}..${to}`);
   const composition = compositions.get(id);
   assert.ok(composition, `no composition ${id}`);
   const lines = [];
@@ -54,48 +87,53 @@ async function render(id, from, to = from, { scale = 1 } = {}) {
   await renderFrames({
     serveUrl,
     composition,
-    puppeteerInstance: browser,
+    puppeteerInstance: await liveBrowser(),
     inputProps: {},
     frameRange: [from, to],
     concurrency: 1,
     scale,
-    imageFormat: "png",
+    imageFormat: pixels ? "png" : "none",
     outputDir: null,
     logLevel: "error",
     onStart: () => {},
     onFrameUpdate: () => {},
-    onFrameBuffer: (buffer, frame) => buffers.push({ frame, buffer }),
+    onFrameBuffer: pixels ? (buffer, frame) => buffers.push({ frame, buffer }) : undefined,
     onBrowserLog: ({ text }) => lines.push(text),
   });
-  assert.equal(buffers.length, to - from + 1, `expected ${to - from + 1} frames, got ${buffers.length}`);
-  buffers.sort((x, y) => x.frame - y.frame);
 
   // A tab Remotion replaces after a crash remounts the composition and
   // sizes a new simulation, which the exact-count checks would blame on
   // the hook.
   const pages = loggedJson(lines, shared.pageLogTag);
-  assert.equal(pages.length, 1, `${id}: rendered in ${pages.length} page loads, so the call log is not one mount's`);
-  const calls = loggedJson(lines, shared.callLogTag);
-  // Every composition sizes a simulation; none logged means the probe
-  // patch is not wired, and every call check would be vacuous.
-  assert.ok(calls.length > 0, `${id}: no setBounds/setViewport call was logged`);
-  assert.ok(
-    calls.every((c) => c.dpr === scale),
-    `${id}: devicePixelRatio was ${calls.map((c) => c.dpr)}, not the scale of ${scale}`,
-  );
+  assert.equal(pages.length, 1, `${id}: rendered in ${pages.length} page loads, so the logs are not one mount's`);
+  if (pixels) {
+    assert.equal(buffers.length, to - from + 1, `expected ${to - from + 1} frames, got ${buffers.length}`);
+    buffers.sort((x, y) => x.frame - y.frame);
+  }
   let frames;
   return {
-    calls,
+    get calls() {
+      const calls = loggedJson(lines, shared.callLogTag);
+      // Every composition sizes a simulation; none logged means the probe
+      // patch is not wired, and every call check would be vacuous.
+      assert.ok(calls.length > 0, `${id}: no setBounds/setViewport call was logged`);
+      assert.ok(
+        calls.every((c) => c.dpr === scale),
+        `${id}: devicePixelRatio was ${calls.map((c) => c.dpr)}, not the scale of ${scale}`,
+      );
+      return calls;
+    },
     uses: loggedJson(lines, shared.useLogTag),
     output: lines.join("\n"),
     get frames() {
+      assert.ok(pixels, `${id}: rendered with pixels: false`);
       assert.equal(scale, 1, `${id}: frames are decoded at scale 1 only`);
       return (frames ??= buffers.map(({ buffer }) => PNG.sync.read(buffer)));
     },
   };
 }
 
-const still = async (id, frame = FRAME) => (await render(id, frame)).frames[0];
+const still = async (id, frame = FRAME) => (await render(id, frame, frame)).frames[0];
 
 // The JSON after `tag` on each console line that starts with it.
 function loggedJson(lines, tag) {
@@ -113,8 +151,10 @@ function loggedJson(lines, tag) {
 
 // A sizing call's arguments as compared. A setViewport that leaves out its
 // scale reads as passing the default of 1; any scale that was passed,
-// including a NaN (logged as the string "NaN"), is compared as it is. Null
-// args (a simulation never sized) stay null.
+// including a NaN (logged as `js("NaN")`), is compared as it is. Null args
+// (a simulation never sized) stay null.
+// A value JSON cannot carry, as test/src/probes.ts logs it.
+const js = (spelling) => ({ $js: spelling });
 const sizeArgs = (method, args) => (method === "setViewport" && args?.length === 2 ? [...args, 1] : args);
 // The calls' method and sizes, without the devicePixelRatio.
 const sizing = (calls) => calls.map(({ method, args }) => ({ method, args: sizeArgs(method, args) }));
@@ -270,7 +310,7 @@ test("switching from sprite to frame mode mid-render draws the frame-mode frame"
 test("the mode switch sizes the same way at devicePixelRatio 2", async () => {
   // The pixel comparison above needs scale 1; this checks only the calls,
   // so a rebuilt viewport scaled to device pixels shows here.
-  const { calls } = await render("ModeSwitchTest", shared.switchFrame - 1, shared.switchFrame + 1, { scale: 2 });
+  const { calls } = await render("ModeSwitchTest", shared.switchFrame - 1, shared.switchFrame + 1, { scale: 2, pixels: false });
   assert.deepEqual(sizing(calls), [
     { method: "setBounds", args: [W, H] },
     { method: "setViewport", args: [W, H, 1] },
@@ -278,20 +318,20 @@ test("the mode switch sizes the same way at devicePixelRatio 2", async () => {
 });
 
 // The initial-size checks run at scale 2, where the page's
-// devicePixelRatio is 2 (render() checks that it was): the simulation works
+// devicePixelRatio is 2 (reading `calls` checks that it was): the simulation works
 // in the composition's own units either way, so these also catch a size
 // scaled to device pixels. The size-change test does the same for the
 // rebuild path.
 test("sprite mode gives the simulation the composition's bounds, once", async () => {
   // With W and H distinct, a swapped size shows up here.
   assert.ok(W !== H, `test is vacuous: ${W}x${H} cannot show a swap`);
-  const { calls } = await render("SpriteModeTest", FRAME, FRAME + 1, { scale: 2 });
+  const { calls } = await render("SpriteModeTest", FRAME, FRAME + 1, { scale: 2, pixels: false });
   assert.deepEqual(sizing(calls), [{ method: "setBounds", args: [W, H] }]);
 });
 
 test("frame mode leaves the bounds to setViewport", async () => {
   // That this composition rasterizes is the first test's check.
-  const { calls } = await render("FrameModeTest", FRAME, FRAME + 1, { scale: 2 });
+  const { calls } = await render("FrameModeTest", FRAME, FRAME + 1, { scale: 2, pixels: false });
   assert.deepEqual(sizing(calls), [{ method: "setViewport", args: [W, H, 1] }]);
 });
 
@@ -299,25 +339,25 @@ test("a rejected bounds size is passed on, warned about, and does not cancel the
   // A host measuring a container before layout passes 0. It must reach
   // setBounds (not be mistaken for "no bounds") and must not abort the
   // render: the next layout pass brings the real size.
-  const { calls, uses, output } = await render("ZeroBoundsTest", FRAME, FRAME + 1);
+  const { calls, uses, output } = await render("ZeroBoundsTest", FRAME, FRAME + 1, { pixels: false });
   assert.deepEqual(sizing(calls), [{ method: "setBounds", args: [0, 0] }]);
   assert.match(output, /BrightFX bounds rejected/, "the rejected size was not warned about");
   assert.ok(uses.length > 0, "the hook never returned a simulation");
 });
 
 test("NaN bounds without a viewport reach setBounds as NaN and do not keep the hook from loading", async () => {
-  const { calls, uses, output } = await render("NaNBoundsTest", FRAME, FRAME + 1);
-  assert.deepEqual(sizing(calls), [{ method: "setBounds", args: ["NaN", "NaN"] }]);
+  const { calls, uses, output } = await render("NaNBoundsTest", FRAME, FRAME + 1, { pixels: false });
+  assert.deepEqual(sizing(calls), [{ method: "setBounds", args: [js("NaN"), js("NaN")] }]);
   assert.match(output, /BrightFX bounds rejected/, "the rejected size was not warned about");
   assert.ok(uses.length > 0, "a NaN bounds left the hook returning null");
   assert.ok(
-    uses.every((u) => u.args[0] === "NaN" && u.args[1] === "NaN"),
+    uses.every((u) => util.isDeepStrictEqual(u.args, [js("NaN"), js("NaN")])),
     `the hook returned a simulation sized ${JSON.stringify(uses.map((u) => u.args))}`,
   );
 });
 
 test("bounds ignored beside a viewport cannot keep the hook from loading", async () => {
-  const { calls, uses } = await render("ViewportNaNBoundsTest", FRAME, FRAME + 1);
+  const { calls, uses } = await render("ViewportNaNBoundsTest", FRAME, FRAME + 1, { pixels: false });
   assert.ok(uses.length > 0, "a NaN bounds next to a viewport left the hook returning null");
   assert.deepEqual(sizing(calls), [{ method: "setViewport", args: [W, H, 1] }]);
 });
@@ -334,7 +374,7 @@ test("a size that changes mid-render rebuilds the simulation for the new one", a
     ["GrowingViewportTest", "setViewport", [100, 60, 1], [640, 360, 1]],
   ]) {
     await t.test(id, async () => {
-      const { calls, uses } = await render(id, switchFrame - 2, switchFrame + 2, { scale: 2 });
+      const { calls, uses } = await render(id, switchFrame - 2, switchFrame + 2, { scale: 2, pixels: false });
       assert.deepEqual(sizing(calls), [{ method, args: first }, { method, args: second }]);
       for (let f = switchFrame - 2; f <= switchFrame + 2; f++) {
         const got = uses.filter((u) => u.frame === f).map((u) => sizeArgs(method, u.args));

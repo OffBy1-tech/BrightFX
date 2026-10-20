@@ -10,6 +10,7 @@ packages/*/node_modules/
 packages/*/dist/
 packages/brightfx-js/wasm/
 packages/brightfx-remotion/public/
+packages/brightfx-remotion/test/out/
 packages/*.tgz
 
 # In-progress specs and plans (superpowers skills write here). They stay
