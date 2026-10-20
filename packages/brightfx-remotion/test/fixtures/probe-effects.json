@@ -1,5 +1,5 @@
 {
-  "comment": "Shared by src/Root.tsx and still.test.mjs. Trigger lists replace the triggers of core/fixtures/ffi-seek.config.json; probes are DOM markers pinned to the bottom-right corner (offsets in px from the right edge), revealed when the named Simulation method runs. callLogTag prefixes the console line logged for each setBounds and setViewport call, useLogTag the line HookTest logs for each render that gets a simulation. switchFrame is where ModeSwitchTest and the Growing* compositions change mode or size.",
+  "comment": "Shared by src/Root.tsx and still.test.mjs. Trigger lists replace the triggers of core/fixtures/ffi-seek.config.json; probes are DOM markers pinned to the bottom-right corner (offsets in px from the right edge), revealed when the named Simulation method runs. callLogTag prefixes the console line logged for each setBounds and setViewport call, useLogTag the line HookTest logs for each render that gets a simulation, pageLogTag the line each page load logs once. switchFrame is where ModeSwitchTest and the Growing* compositions change mode or size.",
   "lateStartTriggers": [
     { "time": 1.5, "kind": "startContinuous" },
     { "time": 1.8, "kind": "burst" }
@@ -7,6 +7,7 @@
   "burstOnceTriggers": [{ "time": 0.5, "kind": "burst" }],
   "callLogTag": "BFXCALL",
   "useLogTag": "BFXUSE",
+  "pageLogTag": "BFXPAGE",
   "switchFrame": 30,
   "probeSize": 6,
   "probes": {

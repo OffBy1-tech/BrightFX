@@ -91,9 +91,9 @@ jobs:
         uses: actions/cache@v6
         with:
           # Remotion resolves its download cache from the cwd of the process
-          # that runs it: the still test spawns `remotion still` inside
-          # packages/brightfx-remotion, so the cache lands there, not at the
-          # workspace root.
+          # that runs it: the still test renders in-process from npm test's
+          # cwd, packages/brightfx-remotion, so the cache lands there, not at
+          # the workspace root.
           path: packages/brightfx-remotion/node_modules/.remotion
           key: remotion-chrome-${{ runner.os }}-${{ hashFiles('packages/package-lock.json') }}
 
