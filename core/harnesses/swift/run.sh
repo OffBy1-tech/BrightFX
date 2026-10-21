@@ -15,6 +15,12 @@ core="$here/../.."
 # Headers/, the parent of CBrightFX/, so `import CBrightFX` resolves through
 # clang's <include>/CBrightFX/module.modulemap lookup: the layout a consumer
 # gets. Unset, the source tree's header and modulemap are used.
+# BRIGHTFX_SWIFT_ARCH: build the harness for this one architecture and run
+# it as that architecture. Unset, swiftc builds for the host. Only x86_64 is
+# accepted: the release workflow sets it to replay the universal slice's
+# x86_64 half, which on an arm64 Mac runs under Rosetta. The target keeps
+# the host compiler's macOS deployment target, so the two replays differ in
+# architecture alone.
 lib_dir="${BRIGHTFX_LIB_DIR:-}"
 if [ -z "$lib_dir" ]; then
   cargo build --manifest-path "$core/Cargo.toml" -p brightfx-ffi --release
@@ -30,10 +36,31 @@ else
   include="$work"
 fi
 
+target_args=()
+run=()
+case "${BRIGHTFX_SWIFT_ARCH:-}" in
+  "") ;;
+  x86_64)
+    deployment="$(swiftc -print-target-info | sed -n 's/^ *"triple": "[^"]*-apple-macosx\([0-9.]*\)".*/\1/p' | head -n 1)"
+    [ -n "$deployment" ] || { echo "ERROR: could not read the macOS deployment target from swiftc -print-target-info" >&2; exit 1; }
+    target_args=(-target "x86_64-apple-macosx$deployment")
+    arch -x86_64 /usr/bin/true 2>/dev/null || {
+      echo "ERROR: BRIGHTFX_SWIFT_ARCH=x86_64 needs Rosetta to run the harness; install it with: softwareupdate --install-rosetta --agree-to-license" >&2
+      exit 1
+    }
+    run=(arch -x86_64)
+    ;;
+  *) echo "ERROR: BRIGHTFX_SWIFT_ARCH must be unset or x86_64, not \"$BRIGHTFX_SWIFT_ARCH\"" >&2; exit 1 ;;
+esac
+
 echo "swift harness: linking $lib_dir, headers from $include"
 swiftc "$here/main.swift" \
+  ${target_args[@]+"${target_args[@]}"} \
   -I "$include" \
   -L "$lib_dir" -lbrightfx_ffi \
   -o "$work/harness"
 
-"$work/harness"
+# The evidence of what ran: the binary's one architecture, and the
+# architecture a process launched the same way reports.
+echo "swift harness: built $(lipo -archs "$work/harness"), running as $(${run[@]+"${run[@]}"} uname -m)"
+${run[@]+"${run[@]}"} "$work/harness"
