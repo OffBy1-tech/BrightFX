@@ -49,9 +49,8 @@ mkdir -p "$work/consumer"
 cp "$core/scripts/consumer-smoke.mjs" "$core/harnesses/node/replay.mjs" "$work/consumer/"
 remotion_pkg="$(cd "$core/../packages/brightfx-remotion" && pwd)"
 # Peer dependencies (the names brightfx-remotion's package.json declares,
-# plus react-dom),
-# installed at the exact versions packages/package-lock.json resolves, which
-# are the versions the repo tests against. The declared ranges are open, so
+# plus react-dom), installed at the exact versions packages/package-lock.json
+# resolves, which are the versions the repo tests against. The declared ranges are open, so
 # installing them would take whatever is newest, and an upstream major
 # release could fail or flap a tag for reasons outside it.
 peers=()
@@ -59,9 +58,9 @@ while IFS= read -r peer; do peers+=("$peer"); done < <(
   node -e '
     const p = require(process.argv[1]);
     const lock = require(process.argv[2]);
-    // react-dom is not declared by brightfx-remotion but is a peer of remotion itself
-    // peer; left alone, npm would take the latest, which can conflict with
-    // the pinned react.
+    // react-dom: not a peer brightfx-remotion declares, but one remotion
+    // does. Left alone, npm takes the latest, which can conflict with the
+    // pinned react.
     const names = new Set([...Object.keys(p.peerDependencies ?? {}), "react-dom"]);
     for (const name of names) {
       const version = lock.packages?.[`node_modules/${name}`]?.version;
