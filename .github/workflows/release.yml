@@ -9,7 +9,9 @@
 # tag, draft or published.
 #
 # Every run builds and verifies every artifact, and the assemble job checks
-# the merged set is exactly the release assets and checksums it. Only a tag
+# the merged set is exactly the release assets and checksums it. A pull
+# request skips smoke-all.sh and the Windows cargo test: smoke.yml runs both
+# on the same commit. Tag and dispatch runs keep them. Only a tag
 # ref reaches publish: a manual (workflow_dispatch) run on a tag ref
 # publishes, which is the retry path; a manual run on a branch, like a pull
 # request that touches the release machinery, is a dry run.
@@ -135,8 +137,10 @@ jobs:
 
       # The full verification first: Rust tests, header and fixture guards,
       # every harness, the package tests. Then build the assets and replay
-      # the harnesses against them.
+      # the harnesses against them. Skipped on a pull request: smoke.yml
+      # runs it on the same commit. Tag and dispatch runs keep it.
       - name: smoke-all.sh
+        if: github.event_name != 'pull_request'
         run: ./core/scripts/smoke-all.sh
 
       - name: Build release assets
@@ -167,7 +171,10 @@ jobs:
           cache: ${{ github.ref_type != 'tag' }}
           node: "true"
 
+      # Skipped on a pull request, like smoke-all.sh on macOS. The build
+      # script's C# harness below still runs on every event.
       - name: Rust tests
+        if: github.event_name != 'pull_request'
         run: cargo test --manifest-path core/Cargo.toml --locked
 
       - name: Build the DLL zip (runs the C# harness against the DLL first)
