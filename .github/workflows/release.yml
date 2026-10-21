@@ -1,0 +1,214 @@
+# Builds, verifies, and publishes a BrightFX release.
+#
+# A pushed tag vX.Y.Z publishes release X.Y.Z. Every version in the repo
+# must already say X.Y.Z (core/scripts/check-version.sh); releases are
+# lockstep. The release notes are the annotated tag's message.
+#
+# A pull request that touches the release machinery, or a manual run,
+# builds and verifies every artifact and stops before publishing.
+#
+# Build logic lives in core/scripts/, not here. The verify step replays the
+# Node, Swift, and C# harnesses against the exact files that get uploaded,
+# so a release exists only if its artifacts reproduced the fixtures.
+#
+# Keeps the two rules smoke.yml documents: never set BRIGHTFX_REGENERATE,
+# and keep cbindgen pinned. The pins below match smoke.yml; change both.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - core/scripts/check-version.sh
+      - core/scripts/build-release-*.sh
+      - core/scripts/verify-release-*.sh
+      - core/scripts/consumer-smoke.mjs
+      - core/harnesses/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CBINDGEN_VERSION: 0.29.4
+  WASM_PACK_VERSION: 0.15.0
+  CARGO_TERM_COLOR: always
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  version:
+    name: Versions are lockstep and match the tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - id: check
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="$(./core/scripts/check-version.sh "$GITHUB_REF_NAME")"
+          else
+            version="$(./core/scripts/check-version.sh)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release $version"
+
+  macos:
+    name: macOS assets, built and verified
+    needs: version
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Refuse to run with BRIGHTFX_REGENERATE set
+        run: |
+          if [ -n "${BRIGHTFX_REGENERATE+set}" ]; then
+            echo "::error::BRIGHTFX_REGENERATE is set (to \"$BRIGHTFX_REGENERATE\"). Only =1 regenerates, but CI refuses any value so a verify run is never ambiguous." >&2
+            exit 1
+          fi
+
+      - name: Rust toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add wasm32-unknown-unknown aarch64-apple-darwin x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: Restore pinned cargo tools
+        id: cargo-tools
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/bin/cbindgen
+            ~/.cargo/bin/wasm-pack
+          key: cargo-tools-${{ runner.os }}-${{ runner.arch }}-cbindgen-${{ env.CBINDGEN_VERSION }}-wasm-pack-${{ env.WASM_PACK_VERSION }}
+
+      - name: Install pinned cargo tools
+        if: steps.cargo-tools.outputs.cache-hit != 'true'
+        run: |
+          cargo install cbindgen --version "$CBINDGEN_VERSION" --locked
+          cargo install wasm-pack --version "$WASM_PACK_VERSION" --locked
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Cache Remotion's Chrome Headless Shell
+        uses: actions/cache@v6
+        with:
+          path: packages/brightfx-remotion/node_modules/.remotion
+          key: remotion-chrome-${{ runner.os }}-${{ hashFiles('packages/package-lock.json') }}
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 9.0.x
+
+      # The full verification first: Rust tests, header and fixture guards,
+      # every harness, the package tests. Then build the assets and replay
+      # the harnesses against them.
+      - name: smoke-all.sh
+        run: ./core/scripts/smoke-all.sh
+
+      - name: Build release assets
+        run: ./core/scripts/build-release-macos.sh dist
+
+      - name: Verify the built assets
+        run: ./core/scripts/verify-release-macos.sh dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-macos
+          path: dist/
+          if-no-files-found: error
+
+  windows:
+    name: Windows DLL, built and verified
+    needs: version
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Refuse to run with BRIGHTFX_REGENERATE set
+        run: |
+          if [ -n "${BRIGHTFX_REGENERATE+set}" ]; then
+            echo "::error::BRIGHTFX_REGENERATE is set (to \"$BRIGHTFX_REGENERATE\"). Only =1 regenerates, but CI refuses any value so a verify run is never ambiguous." >&2
+            exit 1
+          fi
+
+      - name: Rust toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Rust tests
+        run: cargo test --manifest-path core/Cargo.toml
+
+      - name: Build the DLL zip (runs the C# harness against the DLL first)
+        run: ./core/scripts/build-release-windows.sh dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-windows
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: [version, macos, windows]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # Not a draft: consumers pin an exact tag, so publishing promotes
+      # nothing. The notes are the annotated tag's message.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "BrightFX $GITHUB_REF_NAME" \
+            --verify-tag --notes-from-tag
