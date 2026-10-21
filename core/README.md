@@ -213,16 +213,20 @@ To cut one:
 
 A failed tag run publishes nothing. If a build or verify job failed, delete
 the tag (`git push --delete origin vX.Y.Z && git tag -d vX.Y.Z`), fix on
-`main`, and re-tag. If only `publish` failed, use "Re-run failed jobs".
-A manual run of the workflow on a tag ref publishes, too. Publishing is
-retryable: if an interrupted run left a draft release for the tag, `publish`
-finishes it. A release that is already published is never changed, since a
-rebuild would change its checksums; cut a new version instead.
+`main`, and re-tag. If `publish` failed, check the tag's page under
+Releases: delete any leftover draft by hand, then use "Re-run failed jobs".
+`publish` refuses any existing release for the tag and changes nothing. A
+published version is never replaced, since a rebuild would change its
+checksums; bump and cut a new one. A manual run of the workflow on a tag
+ref publishes, too.
 
 `.github/workflows/release.yml` builds every asset, replays the Node, Swift,
-and C# harnesses against those exact files, and only then publishes. Every
-cargo build in it passes `--locked`, so a release builds `Cargo.lock` as
-committed. Every asset but the header and checksums carries the MIT
+and C# harnesses against those exact files, and only then publishes. The
+macOS job's `cargo metadata --locked` check guards every cargo run after it,
+including `smoke-all.sh` and the harness builds, which don't pass `--locked`;
+the Windows `cargo test` and the release scripts' own builds pass `--locked`.
+So a release builds `Cargo.lock` as committed. Every asset but the header and
+checksums carries the MIT
 `LICENSE` (at `package/LICENSE` in the tarballs, at the top of the zips):
 
 | Asset | For |
