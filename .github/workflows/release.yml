@@ -2,10 +2,11 @@
 #
 # A pushed tag vX.Y.Z publishes release X.Y.Z. Every version in the repo
 # must already say X.Y.Z (core/scripts/check-version.sh); releases are
-# lockstep. The release notes are the annotated tag's message.
+# lockstep. The annotated tag's message becomes the release notes, and a
+# lightweight tag is refused.
 #
-# A pull request that touches the release machinery, or a manual run,
-# builds and verifies every artifact and stops before publishing.
+# A pull request that touches the release machinery, or a manual run on a
+# branch, builds and verifies every artifact and stops before publishing.
 #
 # Build logic lives in core/scripts/, not here. The verify step replays the
 # Node, Swift, and C# harnesses against the exact files that get uploaded,
@@ -191,10 +192,47 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+
+      # checkout can fetch a tag as a lightweight copy, dropping its message;
+      # fetch the tag object itself. A release needs an annotated tag: its
+      # message is the release notes.
+      - name: Release notes from the annotated tag
+        run: |
+          git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          if [ "$(git cat-file -t "$GITHUB_REF_NAME")" != tag ]; then
+            echo "::error::$GITHUB_REF_NAME is a lightweight tag; releases need an annotated tag (git tag -a)." >&2
+            exit 1
+          fi
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
+
+      # Upload exactly the assets the build jobs verified, nothing else.
+      - name: Exactly the expected assets
+        working-directory: dist
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          expected="$(printf '%s\n' \
+            "brightfx-wasm-web-$VERSION.tgz" \
+            "brightfx-wasm-nodejs-$VERSION.tgz" \
+            "brightfx-js-$VERSION.tgz" \
+            "brightfx-remotion-$VERSION.tgz" \
+            BrightFX.xcframework.zip \
+            brightfx_ffi-windows-x64.zip \
+            brightfx.h | sort)"
+          # shellcheck disable=SC2012 # the names are fixed ASCII
+          actual="$(ls -1 | sort)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::dist/ does not hold exactly the release assets." >&2
+            diff <(echo "$expected") <(echo "$actual") >&2 || true
+            exit 1
+          fi
 
       - name: Checksums
         working-directory: dist
@@ -203,7 +241,8 @@ jobs:
           cat SHA256SUMS.txt
 
       # Not a draft: consumers pin an exact tag, so publishing promotes
-      # nothing. The notes are the annotated tag's message.
+      # nothing. The notes are the annotated tag's message, read in the
+      # earlier step.
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -211,4 +250,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "BrightFX $GITHUB_REF_NAME" \
-            --verify-tag --notes-from-tag
+            --verify-tag --notes-file "$RUNNER_TEMP/notes.md"
