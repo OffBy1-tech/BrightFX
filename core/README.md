@@ -182,3 +182,43 @@ cargo install wasm-pack && cargo install cbindgen --version 0.29.4
 `cbindgen` is pinned: an unpinned install can pick up a newer version whose
 cosmetic formatting differs from what's committed, which trips the header
 staleness guard in `smoke-all.sh` for a change nobody actually made.
+
+## Releases
+
+Releases are tagged `vX.Y.Z` and lockstep: the four crates, the wasm
+package, `brightfx-js`, and `brightfx-remotion` all carry the same version,
+and `core/scripts/check-version.sh` (run first by `smoke-all.sh`) fails if
+they don't.
+
+To cut one:
+
+1. In a pull request, bump every version to `X.Y.Z` (the six manifests,
+   brightfx-remotion's `brightfx-js` range, both lockfiles) and merge it.
+   While the version is `0.x`, a change to the C ABI, the wasm exports, the
+   schema, or the fixtures' recorded output bumps the minor; anything else
+   bumps the patch.
+2. Tag `main` with an annotated tag; its message becomes the release notes:
+   `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
+
+`.github/workflows/release.yml` builds every asset, replays the Node, Swift,
+and C# harnesses against those exact files, and only then publishes:
+
+| Asset | For |
+| --- | --- |
+| `brightfx-wasm-web-<ver>.tgz` | the raw wasm package, `--target web` |
+| `brightfx-wasm-nodejs-<ver>.tgz` | the raw wasm package, `--target nodejs` |
+| `brightfx-js-<ver>.tgz` | the typed wrapper, web wasm bundled |
+| `brightfx-remotion-<ver>.tgz` | the Remotion component |
+| `BrightFX.xcframework.zip` | Swift: a universal static library; `import CBrightFX` |
+| `brightfx_ffi-windows-x64.zip` | C#/C: `brightfx_ffi.dll`, its import library, the header |
+| `brightfx.h` | the C header, for hosts linking the raw library |
+| `SHA256SUMS.txt` | one checksum per asset |
+
+A consumer pins an exact tag and fetches with
+`gh release download vX.Y.Z --repo OffBy1-tech/BrightFX`. The JS packages
+install from the tarballs as `file:` dependencies until they are published
+to npm.
+
+To build and verify the macOS-side assets locally:
+`./core/scripts/build-release-macos.sh dist && ./core/scripts/verify-release-macos.sh dist`
+(needs `rustup target add aarch64-apple-darwin x86_64-apple-darwin`).

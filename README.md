@@ -107,6 +107,9 @@ position every frame.
 - Continuous integration: every push to `main` and every pull request runs
   the full verification suite on a macOS runner, and the Rust tests plus
   the C# harness against a real `brightfx_ffi.dll` on a Windows runner.
+- Releases: a `vX.Y.Z` tag publishes the wasm packages, the JS packages,
+  a universal macOS xcframework, and the Windows DLL, each replayed
+  against the fixtures before it ships. See `core/README.md`.
 - Render budget: 500 glowing particles at 1280×800 render in about 3.6 ms
   on Apple M3 for the reference scene, under the 4 ms target; see
   `core/brightfx-core/README.md` for every shape.
