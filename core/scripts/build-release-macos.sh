@@ -26,16 +26,26 @@ out="$(cd "$1" && pwd)"
 ver="$("$core/scripts/check-version.sh")"
 echo "==> building release $ver into $out"
 
-# Start clean: remove only the assets this script writes (any version), then
-# refuse if anything else is left, so a stale file can't be mistaken for output.
+# Start clean: refuse an out-dir holding anything but this script's own
+# assets (any version), checked before deleting anything, then remove those,
+# so a stale file can't be mistaken for output.
+strays=()
+for f in "$out"/* "$out"/.[!.]*; do
+  [ -e "$f" ] || continue
+  case "${f##*/}" in
+    brightfx-wasm-web-*.tgz | brightfx-wasm-nodejs-*.tgz | brightfx-js-*.tgz \
+      | brightfx-remotion-*.tgz | BrightFX.xcframework.zip | brightfx.h) ;;
+    *) strays+=("${f##*/}") ;;
+  esac
+done
+if [ ${#strays[@]} -gt 0 ]; then
+  echo "ERROR: $out holds files this script did not write:" >&2
+  printf '  %s\n' "${strays[@]}" >&2
+  exit 1
+fi
 rm -f "$out"/brightfx-wasm-web-*.tgz "$out"/brightfx-wasm-nodejs-*.tgz \
   "$out"/brightfx-js-*.tgz "$out"/brightfx-remotion-*.tgz \
   "$out/BrightFX.xcframework.zip" "$out/brightfx.h"
-if [ -n "$(ls -A "$out")" ]; then
-  echo "ERROR: $out holds files this script did not write:" >&2
-  ls -A "$out" | sed 's/^/  /' >&2
-  exit 1
-fi
 # tsc leftovers and the copied wasm must not end up in the packed tarballs.
 rm -rf "$root/packages/brightfx-js/dist" "$root/packages/brightfx-remotion/dist" \
   "$root/packages/brightfx-js/wasm"

@@ -9,7 +9,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 [ $# -eq 1 ] || { echo "usage: $0 X.Y.Z" >&2; exit 2; }
 new="$1"
-[[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ERROR: \"$new\" is not X.Y.Z" >&2; exit 2; }
+[[ "$new" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "ERROR: \"$new\" is not X.Y.Z" >&2; exit 2; }
 
 # Keep in step with the sources list in check-version.sh.
 crates=(core/brightfx-core core/brightfx-ffi core/brightfx-wasm core/brightfx-tracks)

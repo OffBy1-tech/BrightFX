@@ -256,7 +256,9 @@ to npm.
 To build and verify the macOS-side assets locally:
 `./core/scripts/build-release-macos.sh dist && ./core/scripts/verify-release-macos.sh dist`
 (needs `rustup target add aarch64-apple-darwin x86_64-apple-darwin`; `dist/`
-is gitignored).
+is gitignored). The build replaces its own earlier output in the out-dir and
+refuses one holding anything else. Verifying needs an Apple silicon Mac with
+Rosetta, which runs the xcframework's x86_64 slice.
 
 The headers sit in `Headers/CBrightFX/`, not `Headers/`, because Xcode
 copies every static xcframework's `Headers` into one shared `include/`

@@ -14,6 +14,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cargo_version() { tr -d '\r' < "$root/$1" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1; }
 json_value() { node -p "require(process.argv[1])$2" "$root/$1"; }
 
+# bump-version.sh rewrites the same files; keep its list in step with this one.
 sources=(
   "core/brightfx-core/Cargo.toml=$(cargo_version core/brightfx-core/Cargo.toml)"
   "core/brightfx-ffi/Cargo.toml=$(cargo_version core/brightfx-ffi/Cargo.toml)"

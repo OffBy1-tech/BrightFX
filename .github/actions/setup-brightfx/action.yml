@@ -118,6 +118,9 @@ runs:
       if: inputs.node == 'true'
       with:
         node-version: 22
+        # Never an npm cache, so a tag run restores nothing from setup-node
+        # either, whatever a package.json later declares.
+        package-manager-cache: false
 
     - name: Cache Remotion's Chrome Headless Shell
       if: inputs.remotion-cache == 'true' && inputs.cache == 'true'
