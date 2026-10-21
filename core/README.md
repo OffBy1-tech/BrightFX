@@ -215,9 +215,9 @@ A failed tag run publishes nothing. If a build or verify job failed, delete
 the tag (`git push --delete origin vX.Y.Z && git tag -d vX.Y.Z`), fix on
 `main`, and re-tag. If only `publish` failed, use "Re-run failed jobs".
 A manual run of the workflow on a tag ref publishes, too. Publishing is
-retryable: if the tag already has a release (or a leftover draft), `publish`
-re-uploads the assets over it and sets its title and notes instead of
-failing.
+retryable: if an interrupted run left a draft release for the tag, `publish`
+finishes it. A release that is already published is never changed, since a
+rebuild would change its checksums; cut a new version instead.
 
 `.github/workflows/release.yml` builds every asset, replays the Node, Swift,
 and C# harnesses against those exact files, and only then publishes. Every
