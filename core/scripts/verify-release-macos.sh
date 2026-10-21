@@ -6,8 +6,8 @@
 #   the Swift harness against the xcframework's universal slice and headers,
 #     once as arm64 and once as x86_64 (under Rosetta on an arm64 Mac)
 #   the brightfx-js and brightfx-remotion tarballs installed together into a
-#     scratch project, with remotion's peer dependencies at the ranges its
-#     package.json declares: the brightfx-js consumer smoke, then an import
+#     scratch project, with remotion's peer dependencies at the versions
+#     packages/package-lock.json pins: the brightfx-js consumer smoke, then an import
 #     of brightfx-remotion checked for every name its source exports
 #   the header against the committed one, and the remotion tarball's range
 #   a LICENSE in every tarball and in the xcframework zip
@@ -48,17 +48,44 @@ echo "==> brightfx-js-$ver.tgz and brightfx-remotion-$ver.tgz as a consumer inst
 mkdir -p "$work/consumer"
 cp "$core/scripts/consumer-smoke.mjs" "$core/harnesses/node/replay.mjs" "$work/consumer/"
 remotion_pkg="$(cd "$core/../packages/brightfx-remotion" && pwd)"
-# Peer dependencies as name@range, from the package.json the tarball was
-# packed from, so this follows the declared ranges rather than a copy.
+# Peer dependencies (the names brightfx-remotion's package.json declares,
+# plus react-dom),
+# installed at the exact versions packages/package-lock.json resolves, which
+# are the versions the repo tests against. The declared ranges are open, so
+# installing them would take whatever is newest, and an upstream major
+# release could fail or flap a tag for reasons outside it.
 peers=()
 while IFS= read -r peer; do peers+=("$peer"); done < <(
-  node -e 'const p = require(process.argv[1]); for (const [n, r] of Object.entries(p.peerDependencies ?? {})) console.log(`${n}@${r}`)' \
-    "$remotion_pkg/package.json")
-[ ${#peers[@]} -gt 0 ] || { echo "ERROR: brightfx-remotion's package.json declares no peerDependencies" >&2; exit 1; }
+  node -e '
+    const p = require(process.argv[1]);
+    const lock = require(process.argv[2]);
+    // react-dom is not declared by brightfx-remotion but is a peer of remotion itself
+    // peer; left alone, npm would take the latest, which can conflict with
+    // the pinned react.
+    const names = new Set([...Object.keys(p.peerDependencies ?? {}), "react-dom"]);
+    for (const name of names) {
+      const version = lock.packages?.[`node_modules/${name}`]?.version;
+      if (!version) {
+        console.error(`ERROR: packages/package-lock.json has no node_modules/${name} entry`);
+        process.exit(1);
+      }
+      console.log(`${name}@${version}`);
+    }
+  ' "$remotion_pkg/package.json" "$remotion_pkg/../package-lock.json")
 echo "peer dependencies: ${peers[*]}"
 # The names src/index.tsx exports as values; type-only exports (interface,
-# type) leave nothing in the built module.
-exports="$(sed -nE 's/^export (const|function|class|let) ([A-Za-z_$][A-Za-z0-9_$]*).*/\2/p' "$remotion_pkg/src/index.tsx" | sort | paste -sd ' ' -)"
+# type) leave nothing in the built module. This reads declarations and
+# `export { a, b }` lists only, so `export *` and `export default`, which it
+# cannot check, fail rather than being skipped.
+src="$remotion_pkg/src/index.tsx"
+if grep -qE '^export +(\*|default)' "$src"; then
+  echo "ERROR: $src uses export * or export default; extend the export check in this script" >&2
+  exit 1
+fi
+exports="$({
+  sed -nE 's/^export +(async +)?(const|function|class|let|var) +([A-Za-z_$][A-Za-z0-9_$]*).*/\3/p' "$src"
+  sed -nE 's/^export *\{([^}]*)\}.*/\1/p' "$src" | tr ',' '\n' | sed -E 's/.* as //; s/^ +//; s/ +$//' | grep -v '^$' || true
+} | sort -u | paste -sd ' ' -)"
 [ -n "$exports" ] || { echo "ERROR: found no value exports in brightfx-remotion's src/index.tsx" >&2; exit 1; }
 (cd "$work/consumer" \
   && npm init -y >/dev/null \
