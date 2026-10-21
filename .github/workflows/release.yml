@@ -25,17 +25,11 @@ on:
   push:
     tags: ["v*"]
   pull_request:
+    # Anything a release asset is built or verified from.
     paths:
       - .github/workflows/release.yml
-      - core/scripts/check-version.sh
-      - core/scripts/build-release-*.sh
-      - core/scripts/verify-release-*.sh
-      - core/scripts/consumer-smoke.mjs
-      - core/harnesses/**
-      - core/scripts/smoke-all.sh
-      - core/**/Cargo.toml
-      - core/Cargo.lock
-      - core/brightfx-ffi/**
+      - .cargo/**
+      - core/**
       - packages/**
   workflow_dispatch:
 
@@ -128,6 +122,11 @@ jobs:
         with:
           dotnet-version: 9.0.x
 
+      # smoke-all.sh runs cargo without --locked and would quietly rewrite a
+      # stale Cargo.lock before the release build's --locked could see it.
+      - name: Cargo.lock is current
+        run: cargo metadata --manifest-path core/Cargo.toml --locked --format-version 1 >/dev/null
+
       # The full verification first: Rust tests, header and fixture guards,
       # every harness, the package tests. Then build the assets and replay
       # the harnesses against them.
@@ -182,7 +181,7 @@ jobs:
           dotnet-version: 9.0.x
 
       - name: Rust tests
-        run: cargo test --manifest-path core/Cargo.toml
+        run: cargo test --manifest-path core/Cargo.toml --locked
 
       - name: Build the DLL zip (runs the C# harness against the DLL first)
         run: ./core/scripts/build-release-windows.sh dist
@@ -202,8 +201,12 @@ jobs:
     permissions:
       contents: read
     steps:
+      # Only the two build jobs' artifacts: on "Re-run all jobs" the run
+      # still holds release-assets from the earlier attempt, which an
+      # unfiltered download would merge in.
       - uses: actions/download-artifact@v8
         with:
+          pattern: release-{macos,windows}
           path: dist
           merge-multiple: true
 
@@ -290,12 +293,26 @@ jobs:
 
       # Not a draft: consumers pin an exact tag, so publishing promotes
       # nothing. The notes are the annotated tag's message, read in the
-      # earlier step.
+      # earlier step. Retryable: gh release create fails if the tag already
+      # has a release (or a leftover draft), which would break "Re-run failed
+      # jobs" and a manual run on the tag. So an existing release gets the
+      # assets re-uploaded over its own, then the title and notes, and is
+      # taken out of draft.
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "BrightFX $GITHUB_REF_NAME" \
-            --verify-tag --notes-file "$RUNNER_TEMP/notes.md"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME exists; updating it"
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber \
+              --repo "$GITHUB_REPOSITORY"
+            gh release edit "$GITHUB_REF_NAME" --draft=false \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "BrightFX $GITHUB_REF_NAME" \
+              --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "BrightFX $GITHUB_REF_NAME" \
+              --verify-tag --notes-file "$RUNNER_TEMP/notes.md"
+          fi
