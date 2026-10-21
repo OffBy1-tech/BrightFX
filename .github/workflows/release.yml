@@ -196,15 +196,22 @@ jobs:
 
       # checkout can fetch a tag as a lightweight copy, dropping its message;
       # fetch the tag object itself. A release needs an annotated tag: its
-      # message is the release notes.
+      # message is the release notes. The tag must still name the commit the
+      # assets were built from, in case it was moved during the run.
       - name: Release notes from the annotated tag
         run: |
-          git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
-          if [ "$(git cat-file -t "$GITHUB_REF_NAME")" != tag ]; then
+          tag="refs/tags/$GITHUB_REF_NAME"
+          git fetch --force origin "$tag:$tag"
+          if [ "$(git cat-file -t "$tag")" != tag ]; then
             echo "::error::$GITHUB_REF_NAME is a lightweight tag; releases need an annotated tag (git tag -a)." >&2
             exit 1
           fi
-          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+          if [ "$(git rev-parse "$tag^{commit}")" != "$GITHUB_SHA" ]; then
+            echo "::error::$GITHUB_REF_NAME no longer points at $GITHUB_SHA, the commit these assets were built from." >&2
+            exit 1
+          fi
+          # subject and body, not %(contents), which includes a signed tag's signature
+          git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md"
 
       - uses: actions/download-artifact@v8
