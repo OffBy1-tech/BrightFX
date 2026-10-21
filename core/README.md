@@ -182,3 +182,78 @@ cargo install wasm-pack && cargo install cbindgen --version 0.29.4
 `cbindgen` is pinned: an unpinned install can pick up a newer version whose
 cosmetic formatting differs from what's committed, which trips the header
 staleness guard in `smoke-all.sh` for a change nobody actually made.
+
+## Releases
+
+Releases are tagged `vX.Y.Z` and lockstep: the four crates, the wasm
+package, `brightfx-js`, and `brightfx-remotion` all carry the same version,
+and `core/scripts/check-version.sh` (run first by `smoke-all.sh`) fails if
+they don't.
+
+To cut one:
+
+1. In a pull request, bump every version to `X.Y.Z` (the six manifests,
+   brightfx-remotion's `brightfx-js` range, both lockfiles) and merge it.
+   While the version is `0.x`, a change to the C ABI, the wasm exports, the
+   schema, or the fixtures' recorded output bumps the minor; anything else
+   bumps the patch.
+2. Run the release workflow on `main` and wait for it to pass; a run on a
+   branch builds and verifies everything and publishes nothing.
+   `gh workflow run` returns before the run is listed, so note the newest
+   run first and wait for a different one:
+   ```
+   latest() { gh run list --workflow release.yml --branch main --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // empty'; }
+   prev="$(latest)"
+   gh workflow run release.yml --ref main
+   until run="$(latest)" && [ -n "$run" ] && [ "$run" != "$prev" ]; do sleep 3; done
+   gh run watch "$run" --exit-status
+   ```
+3. Tag `main` with an annotated tag; its message becomes the release notes:
+   `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
+
+A failed tag run publishes nothing. If a build or verify job failed, delete
+the tag (`git push --delete origin vX.Y.Z && git tag -d vX.Y.Z`), fix on
+`main`, and re-tag. If `publish` failed, check the tag's page under
+Releases: delete any leftover draft by hand, then use "Re-run failed jobs".
+`publish` refuses any existing release for the tag and changes nothing. A
+published version is never replaced, since a rebuild would change its
+checksums; bump and cut a new one. A manual run of the workflow on a tag
+ref publishes, too.
+
+`.github/workflows/release.yml` builds every asset, replays the Node, Swift,
+and C# harnesses against those exact files, and only then publishes. The
+macOS job's `cargo metadata --locked` check guards every cargo run after it,
+including `smoke-all.sh` and the harness builds, which don't pass `--locked`;
+the Windows `cargo test` and the release scripts' own builds pass `--locked`.
+So a release builds `Cargo.lock` as committed. Every asset but the header and
+checksums carries the MIT
+`LICENSE` (at `package/LICENSE` in the tarballs, at the top of the zips):
+
+| Asset | For |
+| --- | --- |
+| `brightfx-wasm-web-<ver>.tgz` | the raw wasm package, `--target web` |
+| `brightfx-wasm-nodejs-<ver>.tgz` | the raw wasm package, `--target nodejs` |
+| `brightfx-js-<ver>.tgz` | the typed wrapper, web wasm bundled |
+| `brightfx-remotion-<ver>.tgz` | the Remotion component |
+| `BrightFX.xcframework.zip` | Swift: a universal static library, `brightfx.h` and the modulemap in `Headers/CBrightFX/`; `import CBrightFX` |
+| `brightfx_ffi-windows-x64.zip` | C#/C: `brightfx_ffi.dll` (static C runtime, no VC++ redistributable needed), its import library, the header |
+| `brightfx.h` | the C header, for hosts linking the raw library |
+| `SHA256SUMS.txt` | one checksum per asset |
+
+A consumer pins an exact tag and fetches with
+`gh release download vX.Y.Z --repo OffBy1-tech/BrightFX`. The JS packages
+install from the tarballs as `file:` dependencies until they are published
+to npm.
+
+To build and verify the macOS-side assets locally:
+`./core/scripts/build-release-macos.sh dist && ./core/scripts/verify-release-macos.sh dist`
+(needs `rustup target add aarch64-apple-darwin x86_64-apple-darwin`; `dist/`
+is gitignored).
+
+The headers sit in `Headers/CBrightFX/`, not `Headers/`, because Xcode
+copies every static xcframework's `Headers` into one shared `include/`
+directory, where a top-level `module.modulemap` would collide with another
+library's. The Windows DLL links the C runtime statically
+(`-C target-feature=+crt-static`, set in the repo-root `.cargo/config.toml`,
+so every Windows build, the C# harness included, uses the same flags), and
+`build-release-windows.sh` fails if the DLL imports `vcruntime140.dll`.

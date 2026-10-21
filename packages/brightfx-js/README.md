@@ -7,11 +7,15 @@ that boundary.
 
 ## Install
 
-Not on the npm registry yet. Install from a vendored tarball:
+Not on the npm registry yet. Install from the tarball attached to a GitHub
+release, pinned to an exact tag:
 
 ```bash
-npm install ./vendor/brightfx-js-0.2.0.tgz
+gh release download vX.Y.Z --repo OffBy1-tech/BrightFX --pattern 'brightfx-js-*.tgz' --dir vendor
+npm install ./vendor/brightfx-js-X.Y.Z.tgz
 ```
+
+npm records it as a `file:` dependency on the vendored tarball.
 
 ## API
 

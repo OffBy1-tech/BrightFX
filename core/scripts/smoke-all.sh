@@ -7,6 +7,11 @@ set -euo pipefail
 # have it on PATH.
 export PATH="$HOME/.cargo/bin:$PATH"
 core="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The harnesses' release-verification knobs point them at prebuilt artifacts.
+# This script verifies the source tree, so never inherit them.
+unset BRIGHTFX_WASM_PKG BRIGHTFX_WASM_TARGET BRIGHTFX_LIB_DIR BRIGHTFX_HEADERS_DIR
+echo "==> versions are lockstep"
+"$core/scripts/check-version.sh" >/dev/null
 
 echo "==> Rust tests"
 cargo test --manifest-path "$core/Cargo.toml"

@@ -4,13 +4,30 @@
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { dirname, join, resolve } from "node:path";
 
-import * as mod from "../../brightfx-wasm/pkg-node/brightfx_wasm.js";
 import { readBuffer, readFrame, applyConfig, unwrap } from "./brightfx.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+// Which wasm package to replay against. By default the nodejs build that
+// smoke-all.sh makes; the release workflow points this at each unpacked
+// release tarball instead, so the bytes it verifies are the bytes it ships.
+const pkgDir = process.env.BRIGHTFX_WASM_PKG
+  ? resolve(process.env.BRIGHTFX_WASM_PKG)
+  : join(here, "..", "..", "brightfx-wasm", "pkg-node");
+const target = process.env.BRIGHTFX_WASM_TARGET ?? "nodejs";
+if (target !== "nodejs" && target !== "web") {
+  throw new Error(`BRIGHTFX_WASM_TARGET must be nodejs or web, got ${target}`);
+}
+const mod = await import(pathToFileURL(join(pkgDir, "brightfx_wasm.js")).href);
+// The web target's init takes the wasm as a URL or bytes rather than
+// reading it itself; under Node, bytes.
+if (target === "web") {
+  await mod.default({ module_or_path: readFileSync(join(pkgDir, "brightfx_wasm_bg.wasm")) });
+}
+console.log(`wasm package: ${pkgDir} (${target})`);
 const fixtures = join(here, "..", "..", "fixtures");
 const configJson = readFileSync(join(fixtures, "ffi-smoke.config.json"), "utf8");
 const expected = JSON.parse(readFileSync(join(fixtures, "ffi-smoke.expected.json"), "utf8"));

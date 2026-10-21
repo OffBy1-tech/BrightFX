@@ -1,0 +1,345 @@
+# Builds, verifies, and publishes a BrightFX release.
+#
+# A pushed tag vX.Y.Z publishes release X.Y.Z. Every version in the repo
+# must already say X.Y.Z (core/scripts/check-version.sh); releases are
+# lockstep. The annotated tag's message becomes the release notes. The
+# version job refuses a lightweight tag and a tag on a commit that is not on
+# main, before anything builds. publish refuses a tag moved off the commit
+# the assets were built from, and any release that already exists for the
+# tag, draft or published.
+#
+# Every run builds and verifies every artifact, and the assemble job checks
+# the merged set is exactly the release assets and checksums it. Only a tag
+# ref reaches publish: a manual (workflow_dispatch) run on a tag ref
+# publishes, which is the retry path; a manual run on a branch, like a pull
+# request that touches the release machinery, is a dry run.
+#
+# Build logic lives in core/scripts/, not here. The verify step replays the
+# Node, Swift, and C# harnesses against the exact files that get uploaded,
+# so a release exists only if its artifacts reproduced the fixtures.
+#
+# Keeps the two rules smoke.yml documents: never set BRIGHTFX_REGENERATE,
+# and keep cbindgen pinned. The pins below match smoke.yml; change both.
+
+name: release
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+  pull_request:
+    # Anything a release asset is built or verified from.
+    paths:
+      - .github/workflows/release.yml
+      - .cargo/**
+      - LICENSE
+      - core/**
+      - packages/**
+      - presets/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CBINDGEN_VERSION: 0.29.4
+  WASM_PACK_VERSION: 0.15.0
+  CARGO_TERM_COLOR: always
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  version:
+    name: Versions are lockstep and match the tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - id: check
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="$(./core/scripts/check-version.sh "$GITHUB_REF_NAME")"
+          else
+            version="$(./core/scripts/check-version.sh)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release $version"
+
+      # Fail a bad tag before anything builds. checkout can fetch a tag as a
+      # lightweight copy; fetch the tag object itself. A release needs an
+      # annotated tag: its message is the release notes.
+      - name: Tag is annotated
+        if: github.ref_type == 'tag'
+        run: |
+          tag="refs/tags/$GITHUB_REF_NAME"
+          git fetch --force origin "$tag:$tag"
+          if [ "$(git cat-file -t "$tag")" != tag ]; then
+            echo "::error::$GITHUB_REF_NAME is a lightweight tag; releases need an annotated tag (git tag -a)." >&2
+            exit 1
+          fi
+
+      # checkout is shallow, so unshallow before asking whether main
+      # contains the tagged commit.
+      - name: Tagged commit is on main
+        if: github.ref_type == 'tag'
+        run: |
+          main=+refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+            git fetch -q --unshallow origin "$main"
+          else
+            git fetch -q origin "$main"
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_SHA is not on main; tag a commit that has merged." >&2
+            exit 1
+          fi
+
+  macos:
+    name: macOS assets, built and verified
+    needs: version
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Refuse to run with BRIGHTFX_REGENERATE set
+        run: |
+          if [ -n "${BRIGHTFX_REGENERATE+set}" ]; then
+            echo "::error::BRIGHTFX_REGENERATE is set (to \"$BRIGHTFX_REGENERATE\"). Only =1 regenerates, but CI refuses any value so a verify run is never ambiguous." >&2
+            exit 1
+          fi
+
+      - name: Rust toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add wasm32-unknown-unknown aarch64-apple-darwin x86_64-apple-darwin
+
+      # A release builds from scratch: no cached objects or tools from
+      # earlier runs flow into published assets.
+      - uses: Swatinem/rust-cache@v2
+        if: github.ref_type != 'tag'
+        with:
+          workspaces: core
+
+      - name: Restore pinned cargo tools
+        id: cargo-tools
+        if: github.ref_type != 'tag'
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/bin/cbindgen
+            ~/.cargo/bin/wasm-pack
+          key: cargo-tools-${{ runner.os }}-${{ runner.arch }}-cbindgen-${{ env.CBINDGEN_VERSION }}-wasm-pack-${{ env.WASM_PACK_VERSION }}
+
+      - name: Install pinned cargo tools
+        if: steps.cargo-tools.outputs.cache-hit != 'true'
+        run: |
+          cargo install cbindgen --version "$CBINDGEN_VERSION" --locked
+          cargo install wasm-pack --version "$WASM_PACK_VERSION" --locked
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Cache Remotion's Chrome Headless Shell
+        if: github.ref_type != 'tag'
+        uses: actions/cache@v6
+        with:
+          path: packages/brightfx-remotion/node_modules/.remotion
+          key: remotion-chrome-${{ runner.os }}-${{ hashFiles('packages/package-lock.json') }}
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 9.0.x
+
+      # smoke-all.sh runs cargo without --locked and would quietly rewrite a
+      # stale Cargo.lock before the release build's --locked could see it.
+      - name: Cargo.lock is current
+        run: cargo metadata --manifest-path core/Cargo.toml --locked --format-version 1 >/dev/null
+
+      # The full verification first: Rust tests, header and fixture guards,
+      # every harness, the package tests. Then build the assets and replay
+      # the harnesses against them.
+      - name: smoke-all.sh
+        run: ./core/scripts/smoke-all.sh
+
+      - name: Build release assets
+        run: ./core/scripts/build-release-macos.sh dist
+
+      - name: Verify the built assets
+        run: ./core/scripts/verify-release-macos.sh dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-macos
+          path: dist/
+          if-no-files-found: error
+
+  windows:
+    name: Windows DLL, built and verified
+    needs: version
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Refuse to run with BRIGHTFX_REGENERATE set
+        run: |
+          if [ -n "${BRIGHTFX_REGENERATE+set}" ]; then
+            echo "::error::BRIGHTFX_REGENERATE is set (to \"$BRIGHTFX_REGENERATE\"). Only =1 regenerates, but CI refuses any value so a verify run is never ambiguous." >&2
+            exit 1
+          fi
+
+      - name: Rust toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+
+      # A release builds from scratch: no cached objects or tools from
+      # earlier runs flow into published assets.
+      - uses: Swatinem/rust-cache@v2
+        if: github.ref_type != 'tag'
+        with:
+          workspaces: core
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Rust tests
+        run: cargo test --manifest-path core/Cargo.toml --locked
+
+      - name: Build the DLL zip (runs the C# harness against the DLL first)
+        run: ./core/scripts/build-release-windows.sh dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-windows
+          path: dist/
+          if-no-files-found: error
+
+  # Runs on every event, so a pull request or a branch run exercises the
+  # download, merge, exact-asset check, and checksums that a tag relies on.
+  assemble:
+    name: Assemble the release assets
+    needs: [version, macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Only the two build jobs' artifacts: on "Re-run all jobs" the run
+      # still holds release-assets from the earlier attempt, which an
+      # unfiltered download would merge in.
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-{macos,windows}
+          path: dist
+          merge-multiple: true
+
+      # Upload exactly the assets the build jobs verified, nothing else.
+      - name: Exactly the expected assets
+        working-directory: dist
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          expected="$(printf '%s\n' \
+            "brightfx-wasm-web-$VERSION.tgz" \
+            "brightfx-wasm-nodejs-$VERSION.tgz" \
+            "brightfx-js-$VERSION.tgz" \
+            "brightfx-remotion-$VERSION.tgz" \
+            BrightFX.xcframework.zip \
+            brightfx_ffi-windows-x64.zip \
+            brightfx.h | sort)"
+          # shellcheck disable=SC2012 # the names are fixed ASCII
+          actual="$(ls -1 | sort)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::dist/ does not hold exactly the release assets." >&2
+            diff <(echo "$expected") <(echo "$actual") >&2 || true
+            exit 1
+          fi
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-assets
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: [assemble]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      # checkout can fetch a tag as a lightweight copy, dropping its message;
+      # fetch the tag object itself, whose message is the release notes. The
+      # version job already refused a lightweight tag and a commit not on
+      # main. The tag must still name the commit the assets were built from,
+      # in case it was moved during the run.
+      - name: Release notes from the annotated tag
+        run: |
+          tag="refs/tags/$GITHUB_REF_NAME"
+          git fetch --force origin "$tag:$tag"
+          if [ "$(git cat-file -t "$tag")" != tag ]; then
+            echo "::error::$GITHUB_REF_NAME is a lightweight tag; releases need an annotated tag (git tag -a)." >&2
+            exit 1
+          fi
+          if [ "$(git rev-parse "$tag^{commit}")" != "$GITHUB_SHA" ]; then
+            echo "::error::$GITHUB_REF_NAME no longer points at $GITHUB_SHA, the commit these assets were built from." >&2
+            exit 1
+          fi
+          # On-main check: see the version job's "Tagged commit is on main".
+          # subject and body, not %(contents), which includes a signed tag's signature
+          git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-assets
+          path: dist
+
+      # Not a draft: consumers pin an exact tag, so publishing promotes
+      # nothing. The notes are the annotated tag's message, read in the
+      # earlier step. Refuses if any release already exists for the tag,
+      # published or a draft left by an interrupted run, and changes nothing:
+      # deleting a published release's tag turns it back into a draft, so
+      # finishing a draft could overwrite a public release, and a rebuild is
+      # not byte-identical. A failed API call fails the step (bash -e), so
+      # an error is never read as "no release".
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id")"
+          if [ -n "$existing" ]; then
+            echo "::error::a release for $GITHUB_REF_NAME already exists (published, or a draft left by an interrupted run). Nothing was changed. Delete a leftover draft by hand and re-run; never re-release a published version, cut a new one. Release id(s): ${existing//$'\n'/ }" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "BrightFX $GITHUB_REF_NAME" \
+            --verify-tag --notes-file "$RUNNER_TEMP/notes.md"

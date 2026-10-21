@@ -1,6 +1,6 @@
 {
   "name": "brightfx-js",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "Typed wrapper over the BrightFX wasm build: seek, render, straight-alpha frames, particle views",
   "license": "MIT",
   "type": "module",
