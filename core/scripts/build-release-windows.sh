@@ -9,6 +9,7 @@ core="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [ $# -eq 1 ] || { echo "usage: $0 <out-dir>" >&2; exit 2; }
 mkdir -p "$1"
 out="$(cd "$1" && pwd)"
+command -v 7z >/dev/null || { echo "ERROR: 7z not found on PATH (install 7-Zip)" >&2; exit 1; }
 "$core/scripts/check-version.sh" >/dev/null
 # cargo reads .cargo/config.toml from the current directory up, not from
 # --manifest-path; run from the repo root so +crt-static always applies, to
@@ -34,5 +35,5 @@ done
 cp "$core/brightfx-ffi/include/brightfx.h" "$stage/"
 cp "$core/../LICENSE" "$stage/"
 rm -f "$out/brightfx_ffi-windows-x64.zip"
-(cd "$stage" && 7z a -tzip "$out/brightfx_ffi-windows-x64.zip" brightfx_ffi.dll brightfx_ffi.dll.lib brightfx.h LICENSE >/dev/null)
+(cd "$stage" && 7z a -tzip "$out/brightfx_ffi-windows-x64.zip" brightfx_ffi.dll brightfx_ffi.dll.lib brightfx.h LICENSE | tail -n 3)
 echo "built $out/brightfx_ffi-windows-x64.zip"

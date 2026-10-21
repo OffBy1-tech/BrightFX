@@ -199,8 +199,9 @@ they don't.
 
 To cut one:
 
-1. In a pull request, bump every version to `X.Y.Z` (the six manifests,
-   brightfx-remotion's `brightfx-js` range, both lockfiles) and merge it.
+1. In a pull request, run `./core/scripts/bump-version.sh X.Y.Z` (the six
+   manifests, brightfx-remotion's `brightfx-js` range, both lockfiles),
+   commit the result, and merge it.
    While the version is `0.x`, a change to the C ABI, the wasm exports, the
    schema, or the fixtures' recorded output bumps the minor; anything else
    bumps the patch.

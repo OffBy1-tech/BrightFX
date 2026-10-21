@@ -26,6 +26,20 @@ out="$(cd "$1" && pwd)"
 ver="$("$core/scripts/check-version.sh")"
 echo "==> building release $ver into $out"
 
+# Start clean: remove only the assets this script writes (any version), then
+# refuse if anything else is left, so a stale file can't be mistaken for output.
+rm -f "$out"/brightfx-wasm-web-*.tgz "$out"/brightfx-wasm-nodejs-*.tgz \
+  "$out"/brightfx-js-*.tgz "$out"/brightfx-remotion-*.tgz \
+  "$out/BrightFX.xcframework.zip" "$out/brightfx.h"
+if [ -n "$(ls -A "$out")" ]; then
+  echo "ERROR: $out holds files this script did not write:" >&2
+  ls -A "$out" | sed 's/^/  /' >&2
+  exit 1
+fi
+# tsc leftovers and the copied wasm must not end up in the packed tarballs.
+rm -rf "$root/packages/brightfx-js/dist" "$root/packages/brightfx-remotion/dist" \
+  "$root/packages/brightfx-js/wasm"
+
 # wasm-pack runs a plain `cargo metadata` before its build, which rewrites a
 # stale Cargo.lock, so the --locked it forwards to cargo build comes too
 # late. Check the lockfile first.

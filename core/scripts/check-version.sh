@@ -31,6 +31,10 @@ fail() {
 }
 
 for s in "${sources[@]}"; do
+  v="${s#*=}"
+  { [ -n "$v" ] && [ "$v" != "undefined" ]; } || fail "no version in ${s%%=*}"
+done
+for s in "${sources[@]}"; do
   [ "${s#*=}" = "$version" ] || fail "versions disagree; releases are lockstep"
 done
 
