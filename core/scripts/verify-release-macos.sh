@@ -29,7 +29,7 @@ slices=("$work"/xcf/BrightFX.xcframework/macos-*)
 [ ${#slices[@]} -eq 1 ] || { echo "ERROR: expected one macOS slice, found: ${slices[*]}" >&2; exit 1; }
 slice="${slices[0]}"
 for arch in arm64 x86_64; do lipo "$slice/libbrightfx_ffi.a" -verify_arch "$arch"; done
-BRIGHTFX_LIB_DIR="$slice" BRIGHTFX_HEADERS_DIR="$slice/Headers/CBrightFX" "$core/harnesses/swift/run.sh"
+BRIGHTFX_LIB_DIR="$slice" BRIGHTFX_HEADERS_DIR="$slice/Headers" "$core/harnesses/swift/run.sh"
 
 echo "==> brightfx-js-$ver.tgz as a consumer installs it"
 mkdir -p "$work/consumer"

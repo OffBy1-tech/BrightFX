@@ -2,9 +2,11 @@
 #
 # A pushed tag vX.Y.Z publishes release X.Y.Z. Every version in the repo
 # must already say X.Y.Z (core/scripts/check-version.sh); releases are
-# lockstep. The annotated tag's message becomes the release notes. publish
-# refuses a lightweight tag, a tag moved off the commit the assets were
-# built from, and a tag on a commit that is not on main.
+# lockstep. The annotated tag's message becomes the release notes. The
+# version job refuses a lightweight tag and a tag on a commit that is not on
+# main, before anything builds. publish refuses a tag moved off the commit
+# the assets were built from, and any release that already exists for the
+# tag, draft or published.
 #
 # Every run builds and verifies every artifact, and the assemble job checks
 # the merged set is exactly the release assets and checksums it. Only a tag
@@ -29,6 +31,7 @@ on:
     paths:
       - .github/workflows/release.yml
       - .cargo/**
+      - LICENSE
       - core/**
       - packages/**
   workflow_dispatch:
@@ -67,6 +70,35 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "release $version"
+
+      # Fail a bad tag before anything builds. checkout can fetch a tag as a
+      # lightweight copy; fetch the tag object itself. A release needs an
+      # annotated tag: its message is the release notes.
+      - name: Tag is annotated
+        if: github.ref_type == 'tag'
+        run: |
+          tag="refs/tags/$GITHUB_REF_NAME"
+          git fetch --force origin "$tag:$tag"
+          if [ "$(git cat-file -t "$tag")" != tag ]; then
+            echo "::error::$GITHUB_REF_NAME is a lightweight tag; releases need an annotated tag (git tag -a)." >&2
+            exit 1
+          fi
+
+      # checkout is shallow, so unshallow before asking whether main
+      # contains the tagged commit.
+      - name: Tagged commit is on main
+        if: github.ref_type == 'tag'
+        run: |
+          main=+refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+            git fetch -q --unshallow origin "$main"
+          else
+            git fetch -q origin "$main"
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_SHA is not on main; tag a commit that has merged." >&2
+            exit 1
+          fi
 
   macos:
     name: macOS assets, built and verified
@@ -255,11 +287,10 @@ jobs:
       - uses: actions/checkout@v7
 
       # checkout can fetch a tag as a lightweight copy, dropping its message;
-      # fetch the tag object itself. A release needs an annotated tag: its
-      # message is the release notes. The tag must still name the commit the
-      # assets were built from, in case it was moved during the run, and that
-      # commit must be on main. checkout is shallow, so unshallow before
-      # asking whether main contains it.
+      # fetch the tag object itself, whose message is the release notes. The
+      # version job already refused a lightweight tag and a commit not on
+      # main. The tag must still name the commit the assets were built from,
+      # in case it was moved during the run.
       - name: Release notes from the annotated tag
         run: |
           tag="refs/tags/$GITHUB_REF_NAME"
@@ -272,16 +303,7 @@ jobs:
             echo "::error::$GITHUB_REF_NAME no longer points at $GITHUB_SHA, the commit these assets were built from." >&2
             exit 1
           fi
-          main=+refs/heads/main:refs/remotes/origin/main
-          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
-            git fetch -q --unshallow origin "$main"
-          else
-            git fetch -q origin "$main"
-          fi
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::$GITHUB_SHA is not on main; tag a commit that has merged." >&2
-            exit 1
-          fi
+          # On-main check: see the version job's "Tagged commit is on main".
           # subject and body, not %(contents), which includes a signed tag's signature
           git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md"
@@ -293,32 +315,22 @@ jobs:
 
       # Not a draft: consumers pin an exact tag, so publishing promotes
       # nothing. The notes are the annotated tag's message, read in the
-      # earlier step. Retryable: gh release create fails if the tag already
-      # has a release (or a leftover draft), which would break "Re-run failed
-      # jobs" and a manual run on the tag. So a draft left by an interrupted
-      # create gets these assets uploaded over its own, then the title and
-      # notes, and is published. A release that is already published is
-      # refused: a rebuild is not byte-identical, and replacing its assets
-      # would change checksums consumers have already pinned.
+      # earlier step. Refuses if any release already exists for the tag,
+      # published or a draft left by an interrupted run, and changes nothing:
+      # deleting a published release's tag turns it back into a draft, so
+      # finishing a draft could overwrite a public release, and a rebuild is
+      # not byte-identical. A failed API call fails the step (bash -e), so
+      # an error is never read as "no release".
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if draft="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)"; then
-            if [ "$draft" != true ]; then
-              echo "::error::release $GITHUB_REF_NAME is already published; refusing to replace its assets. Cut a new version instead." >&2
-              exit 1
-            fi
-            echo "draft release $GITHUB_REF_NAME exists; finishing it"
-            gh release upload "$GITHUB_REF_NAME" dist/* --clobber \
-              --repo "$GITHUB_REPOSITORY"
-            gh release edit "$GITHUB_REF_NAME" --draft=false \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "BrightFX $GITHUB_REF_NAME" \
-              --notes-file "$RUNNER_TEMP/notes.md"
-          else
-            gh release create "$GITHUB_REF_NAME" dist/* \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "BrightFX $GITHUB_REF_NAME" \
-              --verify-tag --notes-file "$RUNNER_TEMP/notes.md"
+          existing="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id")"
+          if [ -n "$existing" ]; then
+            echo "::error::a release for $GITHUB_REF_NAME already exists (published, or a draft left by an interrupted run). Nothing was changed. Delete a leftover draft by hand and re-run; never re-release a published version, cut a new one. Release id(s): ${existing//$'\n'/ }" >&2
+            exit 1
           fi
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "BrightFX $GITHUB_REF_NAME" \
+            --verify-tag --notes-file "$RUNNER_TEMP/notes.md"

@@ -7,8 +7,11 @@ core="$here/../.."
 # BRIGHTFX_LIB_DIR: link this directory's libbrightfx_ffi instead of building
 # one. The release workflow points it at the universal slice inside the
 # xcframework, so the harness links the exact library a consumer gets.
-# BRIGHTFX_HEADERS_DIR: take brightfx.h and module.modulemap from here (the
-# xcframework's Headers) instead of the source tree.
+# BRIGHTFX_HEADERS_DIR: an include directory passed straight to swiftc (-I),
+# nothing copied. The release workflow points it at the xcframework's
+# Headers/, the parent of CBrightFX/, so `import CBrightFX` resolves through
+# clang's <include>/CBrightFX/module.modulemap lookup: the layout a consumer
+# gets. Unset, the source tree's header and modulemap are used.
 lib_dir="${BRIGHTFX_LIB_DIR:-}"
 if [ -z "$lib_dir" ]; then
   cargo build --manifest-path "$core/Cargo.toml" -p brightfx-ffi --release
@@ -18,14 +21,15 @@ fi
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 if [ -n "${BRIGHTFX_HEADERS_DIR:-}" ]; then
-  cp "$BRIGHTFX_HEADERS_DIR/brightfx.h" "$BRIGHTFX_HEADERS_DIR/module.modulemap" "$work/"
+  include="$BRIGHTFX_HEADERS_DIR"
 else
   cp "$core/brightfx-ffi/include/brightfx.h" "$here/module.modulemap" "$work/"
+  include="$work"
 fi
 
-echo "swift harness: linking $lib_dir"
+echo "swift harness: linking $lib_dir, headers from $include"
 swiftc "$here/main.swift" \
-  -I "$work" \
+  -I "$include" \
   -L "$lib_dir" -lbrightfx_ffi \
   -o "$work/harness"
 

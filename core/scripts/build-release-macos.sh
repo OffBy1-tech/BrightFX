@@ -12,7 +12,9 @@
 #
 # Builds only; verify-release-macos.sh replays the harnesses against the
 # result. Needs the aarch64-apple-darwin and x86_64-apple-darwin targets.
-# Every cargo build passes --locked, so a release builds Cargo.lock exactly.
+# This script's cargo builds pass --locked, and it checks Cargo.lock first. In
+# CI, the macOS job's "Cargo.lock is current" step guards every cargo run after
+# it (smoke-all.sh and the harnesses build without --locked).
 # Every asset carries the repo's MIT LICENSE.
 set -euo pipefail
 export PATH="$HOME/.cargo/bin:$PATH"
