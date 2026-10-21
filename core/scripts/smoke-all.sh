@@ -7,6 +7,8 @@ set -euo pipefail
 # have it on PATH.
 export PATH="$HOME/.cargo/bin:$PATH"
 core="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+echo "==> versions are lockstep"
+"$core/scripts/check-version.sh" >/dev/null
 
 echo "==> Rust tests"
 cargo test --manifest-path "$core/Cargo.toml"

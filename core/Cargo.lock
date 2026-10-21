@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "brightfx-core"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "brightfx-test-support",
  "schemars",
@@ -14,7 +14,7 @@ dependencies = [
 
 [[package]]
 name = "brightfx-ffi"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "brightfx-core",
  "serde_json",
@@ -26,7 +26,7 @@ version = "0.1.0"
 
 [[package]]
 name = "brightfx-tracks"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "brightfx-core",
  "brightfx-test-support",
@@ -36,7 +36,7 @@ dependencies = [
 
 [[package]]
 name = "brightfx-wasm"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "brightfx-core",
  "brightfx-tracks",
