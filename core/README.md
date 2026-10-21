@@ -197,8 +197,19 @@ To cut one:
    While the version is `0.x`, a change to the C ABI, the wasm exports, the
    schema, or the fixtures' recorded output bumps the minor; anything else
    bumps the patch.
-2. Tag `main` with an annotated tag; its message becomes the release notes:
+2. Run the release workflow on `main` and wait for it to pass; a run on a
+   branch builds and verifies everything and publishes nothing:
+   ```
+   gh workflow run release.yml --ref main
+   gh run watch "$(gh run list --workflow release.yml --branch main --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')"
+   ```
+3. Tag `main` with an annotated tag; its message becomes the release notes:
    `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
+
+A failed tag run publishes nothing. If a build or verify job failed, delete
+the tag (`git push --delete origin vX.Y.Z && git tag -d vX.Y.Z`), fix on
+`main`, and re-tag. If only `publish` failed, use "Re-run failed jobs".
+A manual run of the workflow on a tag ref publishes, too.
 
 `.github/workflows/release.yml` builds every asset, replays the Node, Swift,
 and C# harnesses against those exact files, and only then publishes:
