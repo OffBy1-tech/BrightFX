@@ -198,10 +198,15 @@ To cut one:
    schema, or the fixtures' recorded output bumps the minor; anything else
    bumps the patch.
 2. Run the release workflow on `main` and wait for it to pass; a run on a
-   branch builds and verifies everything and publishes nothing:
+   branch builds and verifies everything and publishes nothing.
+   `gh workflow run` returns before the run is listed, so note the newest
+   run first and wait for a different one:
    ```
+   latest() { gh run list --workflow release.yml --branch main --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // empty'; }
+   prev="$(latest)"
    gh workflow run release.yml --ref main
-   gh run watch "$(gh run list --workflow release.yml --branch main --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')"
+   until run="$(latest)" && [ -n "$run" ] && [ "$run" != "$prev" ]; do sleep 3; done
+   gh run watch "$run" --exit-status
    ```
 3. Tag `main` with an annotated tag; its message becomes the release notes:
    `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
@@ -209,10 +214,16 @@ To cut one:
 A failed tag run publishes nothing. If a build or verify job failed, delete
 the tag (`git push --delete origin vX.Y.Z && git tag -d vX.Y.Z`), fix on
 `main`, and re-tag. If only `publish` failed, use "Re-run failed jobs".
-A manual run of the workflow on a tag ref publishes, too.
+A manual run of the workflow on a tag ref publishes, too. Publishing is
+retryable: if the tag already has a release (or a leftover draft), `publish`
+re-uploads the assets over it and sets its title and notes instead of
+failing.
 
 `.github/workflows/release.yml` builds every asset, replays the Node, Swift,
-and C# harnesses against those exact files, and only then publishes:
+and C# harnesses against those exact files, and only then publishes. Every
+cargo build in it passes `--locked`, so a release builds `Cargo.lock` as
+committed. Every asset but the header and checksums carries the MIT
+`LICENSE` (at `package/LICENSE` in the tarballs, at the top of the zips):
 
 | Asset | For |
 | --- | --- |
@@ -220,8 +231,8 @@ and C# harnesses against those exact files, and only then publishes:
 | `brightfx-wasm-nodejs-<ver>.tgz` | the raw wasm package, `--target nodejs` |
 | `brightfx-js-<ver>.tgz` | the typed wrapper, web wasm bundled |
 | `brightfx-remotion-<ver>.tgz` | the Remotion component |
-| `BrightFX.xcframework.zip` | Swift: a universal static library; `import CBrightFX` |
-| `brightfx_ffi-windows-x64.zip` | C#/C: `brightfx_ffi.dll`, its import library, the header |
+| `BrightFX.xcframework.zip` | Swift: a universal static library, `brightfx.h` and the modulemap in `Headers/CBrightFX/`; `import CBrightFX` |
+| `brightfx_ffi-windows-x64.zip` | C#/C: `brightfx_ffi.dll` (static C runtime, no VC++ redistributable needed), its import library, the header |
 | `brightfx.h` | the C header, for hosts linking the raw library |
 | `SHA256SUMS.txt` | one checksum per asset |
 
@@ -232,4 +243,13 @@ to npm.
 
 To build and verify the macOS-side assets locally:
 `./core/scripts/build-release-macos.sh dist && ./core/scripts/verify-release-macos.sh dist`
-(needs `rustup target add aarch64-apple-darwin x86_64-apple-darwin`).
+(needs `rustup target add aarch64-apple-darwin x86_64-apple-darwin`; `dist/`
+is gitignored).
+
+The headers sit in `Headers/CBrightFX/`, not `Headers/`, because Xcode
+copies every static xcframework's `Headers` into one shared `include/`
+directory, where a top-level `module.modulemap` would collide with another
+library's. The Windows DLL links the C runtime statically
+(`-C target-feature=+crt-static`, set in the repo-root `.cargo/config.toml`,
+so every Windows build, the C# harness included, uses the same flags), and
+`build-release-windows.sh` fails if the DLL imports `vcruntime140.dll`.
