@@ -150,8 +150,10 @@ job is x64 only: the `Cdecl` calling convention the harness declares is a
 no-op on x64 and arm64 and would only be exercised by an x86 build, which
 nothing targets. Neither job sets `BRIGHTFX_REGENERATE`, and both refuse to
 start if that variable has leaked into the environment; regeneration stays
-a manual, reviewed step. The `cbindgen` pin below is repeated in the
-workflow and the two must move together.
+a manual, reviewed step. Both jobs set up through the composite action
+`.github/actions/setup-brightfx`, which holds CI's tool pins; the
+`cbindgen` and `wasm-pack` pins below are repeated there and must move
+together.
 
 After an intentional simulation change, regenerate the particle fixtures
 (and the cue fixture too if the change touched track serialization):
@@ -175,9 +177,14 @@ After changing any `extern "C"` signature, regenerate the header:
 ## Prerequisites
 
 ```bash
-rustup target add wasm32-unknown-unknown
-cargo install wasm-pack && cargo install cbindgen --version 0.29.4
+cargo install wasm-pack --version 0.15.0 --locked
+cargo install cbindgen --version 0.29.4 --locked
 ```
+
+The repo-root `rust-toolchain.toml` pins rustc and the
+`wasm32-unknown-unknown` target; rustup installs both the first time you
+build in the repo, so there is no `rustup target add` step. A toolchain
+bump is a pull request that edits that file.
 
 `cbindgen` is pinned: an unpinned install can pick up a newer version whose
 cosmetic formatting differs from what's committed, which trips the header
