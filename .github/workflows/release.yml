@@ -295,15 +295,21 @@ jobs:
       # nothing. The notes are the annotated tag's message, read in the
       # earlier step. Retryable: gh release create fails if the tag already
       # has a release (or a leftover draft), which would break "Re-run failed
-      # jobs" and a manual run on the tag. So an existing release gets the
-      # assets re-uploaded over its own, then the title and notes, and is
-      # taken out of draft.
+      # jobs" and a manual run on the tag. So a draft left by an interrupted
+      # create gets these assets uploaded over its own, then the title and
+      # notes, and is published. A release that is already published is
+      # refused: a rebuild is not byte-identical, and replacing its assets
+      # would change checksums consumers have already pinned.
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "release $GITHUB_REF_NAME exists; updating it"
+          if draft="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [ "$draft" != true ]; then
+              echo "::error::release $GITHUB_REF_NAME is already published; refusing to replace its assets. Cut a new version instead." >&2
+              exit 1
+            fi
+            echo "draft release $GITHUB_REF_NAME exists; finishing it"
             gh release upload "$GITHUB_REF_NAME" dist/* --clobber \
               --repo "$GITHUB_REPOSITORY"
             gh release edit "$GITHUB_REF_NAME" --draft=false \
