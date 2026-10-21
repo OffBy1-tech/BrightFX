@@ -19,8 +19,7 @@ for target in nodejs web; do
   echo "==> Node harness against brightfx-wasm-$target-$ver.tgz"
   mkdir -p "$work/$target"
   tar -xzf "$out/brightfx-wasm-$target-$ver.tgz" -C "$work/$target"
-  BRIGHTFX_WASM_PKG="$work/$target/package" BRIGHTFX_WASM_TARGET="$target" \
-    node "$core/harnesses/node/smoke.mjs"
+  BRIGHTFX_WASM_PKG="$work/$target/package" node "$core/harnesses/node/smoke.mjs"
 done
 
 echo "==> Swift harness against BrightFX.xcframework.zip"
@@ -33,7 +32,7 @@ BRIGHTFX_LIB_DIR="$slice" BRIGHTFX_HEADERS_DIR="$slice/Headers" "$core/harnesses
 
 echo "==> brightfx-js-$ver.tgz as a consumer installs it"
 mkdir -p "$work/consumer"
-cp "$core/scripts/consumer-smoke.mjs" "$work/consumer/"
+cp "$core/scripts/consumer-smoke.mjs" "$core/harnesses/node/replay.mjs" "$work/consumer/"
 (cd "$work/consumer" \
   && npm init -y >/dev/null \
   && npm install --no-audit --no-fund "$out/brightfx-js-$ver.tgz" >/dev/null \

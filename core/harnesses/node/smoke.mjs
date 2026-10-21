@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
 import { readBuffer, readFrame, applyConfig, unwrap } from "./brightfx.mjs";
+import { drive, assertBufferClose } from "./replay.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -17,17 +18,30 @@ const here = dirname(fileURLToPath(import.meta.url));
 const pkgDir = process.env.BRIGHTFX_WASM_PKG
   ? resolve(process.env.BRIGHTFX_WASM_PKG)
   : join(here, "..", "..", "brightfx-wasm", "pkg-node");
-const target = process.env.BRIGHTFX_WASM_TARGET ?? "nodejs";
-if (target !== "nodejs" && target !== "web") {
-  throw new Error(`BRIGHTFX_WASM_TARGET must be nodejs or web, got ${target}`);
+// The package says which wasm-pack target built it: the web target is an
+// ES module ("type": "module") whose default export is the init function;
+// the nodejs target is CommonJS with neither, and instantiates itself on
+// import. Both signals are read so a package whose manifest disagrees with
+// its JS fails here, naming the package, not as a confusing error further in.
+const pkgType = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")).type;
+const target = pkgType === "module" ? "web" : "nodejs";
+const manifestSays = `package.json ${pkgType === undefined ? "has no \"type\"" : `has "type": ${JSON.stringify(pkgType)}`}, so ${target}`;
+let mod;
+try {
+  mod = await import(pathToFileURL(join(pkgDir, "brightfx_wasm.js")).href);
+} catch (err) {
+  throw new Error(`${pkgDir}: ${manifestSays}, but its JS does not load as that: ${err.message}`, { cause: err });
 }
-const mod = await import(pathToFileURL(join(pkgDir, "brightfx_wasm.js")).href);
+if ((target === "web") !== (typeof mod.default === "function")) {
+  const js = typeof mod.default === "function" ? "has a default init export" : "has no default init export";
+  throw new Error(`${pkgDir}: ${manifestSays}, but its JS ${js}`);
+}
 // The web target's init takes the wasm as a URL or bytes rather than
 // reading it itself; under Node, bytes.
 if (target === "web") {
   await mod.default({ module_or_path: readFileSync(join(pkgDir, "brightfx_wasm_bg.wasm")) });
 }
-console.log(`wasm package: ${pkgDir} (${target})`);
+console.log(`wasm package: ${pkgDir} (detected target: ${target})`);
 const fixtures = join(here, "..", "..", "fixtures");
 const configJson = readFileSync(join(fixtures, "ffi-smoke.config.json"), "utf8");
 const expected = JSON.parse(readFileSync(join(fixtures, "ffi-smoke.expected.json"), "utf8"));
@@ -52,28 +66,9 @@ function test(name, fn) {
   console.log(`  ok  ${name}`);
 }
 
-// Replays the emitter states the fixture recorded, one advance per frame,
-// with the burst on the recorded frame.
-function drive(sim, { emitterFrames, burstFrame, dt }) {
-  emitterFrames.forEach((e, frame) => {
-    sim.setEmitter(e.x, e.y, e.vx, e.vy, true);
-    if (frame === burstFrame) sim.triggerBurst();
-    sim.advance(dt);
-  });
-}
-
-function assertBufferMatches(sim, { particleCount, buffer, tolerance }) {
-  assert.equal(sim.particleCount(), particleCount, "particle count diverged");
-  const actual = readBuffer(sim, mod);
-  assert.equal(actual.length, buffer.length, "buffer length diverged");
-  for (let i = 0; i < actual.length; i++) {
-    // Finiteness is checked explicitly rather than left to the comparison
-    // happening to be written in the NaN-failing direction. The message is
-    // only built on failure: this loop runs over every float.
-    const ok =
-      Number.isFinite(actual[i]) && Number.isFinite(buffer[i]) && Math.abs(actual[i] - buffer[i]) <= tolerance;
-    if (!ok) assert.fail(`float ${i} drifted or is not finite: got ${actual[i]}, expected ${buffer[i]}`);
-  }
+function assertBufferMatches(sim, expected) {
+  assert.equal(sim.particleCount(), expected.particleCount, "particle count diverged");
+  assertBufferClose(readBuffer(sim, mod), expected);
 }
 
 test("stride matches the Rust constant", () => {
