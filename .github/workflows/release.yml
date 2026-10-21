@@ -25,7 +25,7 @@ name: release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v[0-9]*"]
   pull_request:
     # Anything a release asset is built or verified from.
     paths:
@@ -34,6 +34,7 @@ on:
       - LICENSE
       - core/**
       - packages/**
+      - presets/**
   workflow_dispatch:
 
 permissions:
@@ -121,12 +122,16 @@ jobs:
           rustup default stable
           rustup target add wasm32-unknown-unknown aarch64-apple-darwin x86_64-apple-darwin
 
+      # A release builds from scratch: no cached objects or tools from
+      # earlier runs flow into published assets.
       - uses: Swatinem/rust-cache@v2
+        if: github.ref_type != 'tag'
         with:
           workspaces: core
 
       - name: Restore pinned cargo tools
         id: cargo-tools
+        if: github.ref_type != 'tag'
         uses: actions/cache@v6
         with:
           path: |
@@ -145,6 +150,7 @@ jobs:
           node-version: 22
 
       - name: Cache Remotion's Chrome Headless Shell
+        if: github.ref_type != 'tag'
         uses: actions/cache@v6
         with:
           path: packages/brightfx-remotion/node_modules/.remotion
@@ -200,7 +206,10 @@ jobs:
           rustup update stable --no-self-update
           rustup default stable
 
+      # A release builds from scratch: no cached objects or tools from
+      # earlier runs flow into published assets.
       - uses: Swatinem/rust-cache@v2
+        if: github.ref_type != 'tag'
         with:
           workspaces: core
 

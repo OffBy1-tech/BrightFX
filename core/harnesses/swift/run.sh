@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Builds and runs the Swift smoke harness against the release staticlib, or against BRIGHTFX_LIB_DIR.
+# Builds and runs the Swift smoke harness against target/release, or against BRIGHTFX_LIB_DIR.
+# target/release holds both libbrightfx_ffi.a and .dylib, and the linker
+# prefers the dylib, so the default run links dynamically. The release
+# workflow's run links the xcframework slice, which holds only the .a.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 core="$here/../.."

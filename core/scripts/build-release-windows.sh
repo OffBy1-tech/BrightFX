@@ -10,12 +10,17 @@ core="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mkdir -p "$1"
 out="$(cd "$1" && pwd)"
 "$core/scripts/check-version.sh" >/dev/null
+# cargo reads .cargo/config.toml from the current directory up, not from
+# --manifest-path; run from the repo root so +crt-static always applies, to
+# this build and to the one csharp/run.sh links.
+cd "$core/.."
 
 cargo build --manifest-path "$core/Cargo.toml" -p brightfx-ffi --release --locked
 # Import names are ASCII strings in the import table; a dynamic CRT shows up
-# as vcruntime140.dll.
-if grep -qai 'vcruntime140' "$core/target/release/brightfx_ffi.dll"; then
-  echo "ERROR: brightfx_ffi.dll imports the VC++ runtime; expected +crt-static" >&2
+# as vcruntime140*.dll, and C++ code as msvcp140*.dll or concrt140.dll: all
+# part of the VC++ redistributable.
+if grep -qaiE 'vcruntime1[0-9]{2}|msvcp1[0-9]{2}|concrt1[0-9]{2}' "$core/target/release/brightfx_ffi.dll"; then
+  echo "ERROR: brightfx_ffi.dll imports the VC++ redistributable; expected +crt-static" >&2
   exit 1
 fi
 "$core/harnesses/csharp/run.sh"
