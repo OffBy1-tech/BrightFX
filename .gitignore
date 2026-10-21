@@ -4,6 +4,8 @@ core/brightfx-wasm/pkg-web/
 core/harnesses/csharp/bin/
 core/harnesses/csharp/obj/
 .superpowers/
+# build-release-*.sh output, as core/README.md runs it
+/dist/
 
 packages/node_modules/
 packages/*/node_modules/
@@ -12,6 +14,8 @@ packages/brightfx-js/wasm/
 packages/brightfx-remotion/public/
 packages/brightfx-remotion/test/out/
 packages/*.tgz
+# build-release-macos.sh copies the root LICENSE in before npm pack
+packages/*/LICENSE
 
 # In-progress specs and plans (superpowers skills write here). They stay
 # local; finished ones move to docs/specs and docs/plans. See docs/README.md.

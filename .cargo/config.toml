@@ -1,0 +1,5 @@
+# The Windows DLL links the C runtime statically, so consumers need no
+# VC++ redistributable. Repo root: cargo finds config by walking up from
+# the cwd, and the scripts run cargo from the root with --manifest-path.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
