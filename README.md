@@ -137,12 +137,15 @@ Known gaps and deferred work are tracked in
 ## Verifying
 
 ```bash
-rustup target add wasm32-unknown-unknown
-cargo install wasm-pack
-cargo install cbindgen --version 0.29.4   # pinned: version churn trips the header guard
+cargo install wasm-pack --version 0.15.0 --locked
+cargo install cbindgen --version 0.29.4 --locked   # pinned: version churn trips the header guard
 
 ./core/scripts/smoke-all.sh
 ```
+
+`rust-toolchain.toml` pins rustc and the wasm target; rustup installs both
+the first time you build in the repo. CI's tool pins live in
+`.github/actions/setup-brightfx/action.yml`.
 
 That runs the Rust tests, checks the generated C header is current, confirms a
 verify run did not rewrite the fixtures, then replays the protocol through all

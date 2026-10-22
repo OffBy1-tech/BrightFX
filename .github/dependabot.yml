@@ -1,0 +1,11 @@
+# Keeps the SHA-pinned actions current: a weekly pull request per bump,
+# which updates the commit SHA and the # vX.Y.Z comment beside it. Covers
+# .github/workflows/ and the composite action under .github/actions/.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly

@@ -8,16 +8,15 @@
 # the P/Invoke contract is checked against a real .dll, not only a .dylib
 # standing in for one.
 #
-# Two rules this workflow must keep:
+# Setup, and every toolchain and tool pin, lives in the composite action
+# .github/actions/setup-brightfx (rustc in rust-toolchain.toml). Each job
+# calls it right after checkout. It keeps two rules for this workflow:
+# never set BRIGHTFX_REGENERATE, and keep cbindgen pinned; its header says
+# why.
 #
-# 1. Never set BRIGHTFX_REGENERATE. Set to 1, the fixture tests silently
-#    re-baseline instead of verifying and report success. Regeneration is
-#    a manual, human-reviewed step; the first job step refuses to run if the
-#    variable has leaked in from anywhere, whatever its value.
-# 2. cbindgen stays pinned. An unpinned version produces cosmetic churn in
-#    the generated header, which trips the staleness guard with a failure
-#    that looks like an ABI change but is not. The pin lives in one place
-#    below (CBINDGEN_VERSION) and matches core/README.md.
+# Third-party and actions/* steps are pinned by full commit SHA, with the
+# release tag in a comment. Dependabot (.github/dependabot.yml) proposes
+# the bumps.
 
 name: smoke
 
@@ -35,8 +34,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CBINDGEN_VERSION: 0.29.4
-  WASM_PACK_VERSION: 0.15.0
   CARGO_TERM_COLOR: always
   DOTNET_NOLOGO: "1"
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
@@ -49,67 +46,13 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Refuse to run with BRIGHTFX_REGENERATE set
-        run: |
-          if [ -n "${BRIGHTFX_REGENERATE+set}" ]; then
-            echo "::error::BRIGHTFX_REGENERATE is set (to \"$BRIGHTFX_REGENERATE\"). Only =1 regenerates, but CI refuses any value so a verify run is never ambiguous." >&2
-            exit 1
-          fi
-
-      - name: Rust toolchain
-        run: |
-          rustup update stable --no-self-update
-          rustup default stable
-          rustup target add wasm32-unknown-unknown
-
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-brightfx
         with:
-          workspaces: core
-
-      - name: Restore pinned cargo tools
-        id: cargo-tools
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/bin/cbindgen
-            ~/.cargo/bin/wasm-pack
-          key: cargo-tools-${{ runner.os }}-${{ runner.arch }}-cbindgen-${{ env.CBINDGEN_VERSION }}-wasm-pack-${{ env.WASM_PACK_VERSION }}
-
-      - name: Install pinned cargo tools
-        if: steps.cargo-tools.outputs.cache-hit != 'true'
-        run: |
-          cargo install cbindgen --version "$CBINDGEN_VERSION" --locked
-          cargo install wasm-pack --version "$WASM_PACK_VERSION" --locked
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-
-      - name: Cache Remotion's Chrome Headless Shell
-        uses: actions/cache@v6
-        with:
-          # Remotion resolves its download cache from the cwd of the process
-          # that runs it: the still test renders in-process from npm test's
-          # cwd, packages/brightfx-remotion, so the cache lands there, not at
-          # the workspace root.
-          path: packages/brightfx-remotion/node_modules/.remotion
-          key: remotion-chrome-${{ runner.os }}-${{ hashFiles('packages/package-lock.json') }}
-
-      - uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: 9.0.x
-
-      - name: Toolchain versions
-        run: |
-          rustc --version
-          cargo --version
-          cbindgen --version
-          wasm-pack --version
-          swift --version
-          node --version
-          dotnet --version
+          wasm-tools: "true"
+          node: "true"
+          remotion-cache: "true"
 
       - name: smoke-all.sh
         run: ./core/scripts/smoke-all.sh
@@ -126,33 +69,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Refuse to run with BRIGHTFX_REGENERATE set
-        run: |
-          if [ -n "${BRIGHTFX_REGENERATE+set}" ]; then
-            echo "::error::BRIGHTFX_REGENERATE is set (to \"$BRIGHTFX_REGENERATE\"). Only =1 regenerates, but CI refuses any value so a verify run is never ambiguous." >&2
-            exit 1
-          fi
-
-      - name: Rust toolchain
-        run: |
-          rustup update stable --no-self-update
-          rustup default stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: core
-
-      - uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: 9.0.x
-
-      - name: Toolchain versions
-        run: |
-          rustc --version
-          cargo --version
-          dotnet --version
+      - uses: ./.github/actions/setup-brightfx
 
       # The fixture and golden tests compare within a libm-drift tolerance;
       # this is the first OS other than the recording one to exercise it.

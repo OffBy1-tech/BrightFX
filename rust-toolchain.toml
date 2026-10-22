@@ -1,0 +1,13 @@
+# Pins the Rust toolchain for local builds and CI alike. Every CI job
+# installs exactly this rustc (.github/actions/setup-brightfx), so a release
+# dry run and the tag run that follows it compile with the same compiler,
+# not whatever "stable" meant on each day. A bump is a pull request: CI
+# re-verifies the fixtures and the release build against the new rustc
+# before it lands.
+#
+# profile and components are left unset so contributors keep the
+# components they already have (rustfmt, clippy, rust-analyzer).
+
+[toolchain]
+channel = "1.99.1"
+targets = ["wasm32-unknown-unknown"]

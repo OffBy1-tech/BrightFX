@@ -1,0 +1,157 @@
+# Sets up a BrightFX CI job: the pinned Rust toolchain, the pinned cargo
+# tools, Node, and .NET. smoke.yml and release.yml both call it right after
+# checkout, so every pin lives here once (the Rust pin in rust-toolchain.toml)
+# and the two workflows cannot drift apart.
+#
+# Two rules this action keeps for every job that uses it:
+#
+# 1. Never set BRIGHTFX_REGENERATE. Set to 1, the fixture tests silently
+#    re-baseline instead of verifying and report success. Regeneration is
+#    a manual, human-reviewed step; the first step below refuses to run if
+#    the variable has leaked in from anywhere, whatever its value.
+# 2. cbindgen stays pinned. An unpinned version produces cosmetic churn in
+#    the generated header, which trips the staleness guard with a failure
+#    that looks like an ABI change but is not. The pin lives in one place,
+#    the "Tool pins" step below, and matches core/README.md.
+#
+# Inputs are strings, as composite action inputs always are: compare them
+# to 'true', never treat them as booleans.
+
+name: Set up BrightFX
+description: Pinned Rust toolchain, cbindgen, wasm-pack, Node, and .NET for BrightFX CI.
+
+inputs:
+  cache:
+    description: >-
+      "false" skips every cache restore. release.yml passes false on a tag
+      run, so no cached objects or tools from earlier runs flow into
+      published assets.
+    default: "true"
+  extra-targets:
+    description: Space-separated rustup targets beyond those rust-toolchain.toml lists.
+    default: ""
+  wasm-tools:
+    description: '"true" installs the pinned cbindgen and wasm-pack.'
+    default: "false"
+  node:
+    description: '"true" sets up Node.'
+    default: "false"
+  dotnet:
+    description: '"true" sets up .NET.'
+    default: "true"
+  remotion-cache:
+    description: '"true" restores the Remotion Chrome Headless Shell cache (when cache is true).'
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Refuse to run with BRIGHTFX_REGENERATE set
+      shell: bash
+      run: |
+        if [ -n "${BRIGHTFX_REGENERATE+set}" ]; then
+          echo "::error::BRIGHTFX_REGENERATE is set (to \"$BRIGHTFX_REGENERATE\"). Only =1 regenerates, but CI refuses any value so a verify run is never ambiguous." >&2
+          exit 1
+        fi
+
+    # The cargo tool pins, once: the cache key and the install read them
+    # from here. Composite actions have no top-level env.
+    - name: Tool pins
+      id: pins
+      shell: bash
+      run: |
+        echo "cbindgen=0.29.4" >> "$GITHUB_OUTPUT"
+        echo "wasm-pack=0.15.0" >> "$GITHUB_OUTPUT"
+
+    # rust-toolchain.toml names the channel and the wasm target. rustup 1.28
+    # and later install it with a bare `rustup toolchain install`; older
+    # rustup installs it on `rustup show`. The log says which one ran.
+    - name: Rust toolchain (rust-toolchain.toml)
+      id: rust
+      shell: bash
+      env:
+        EXTRA_TARGETS: ${{ inputs.extra-targets }}
+      run: |
+        rustup_version="$(rustup --version 2>/dev/null | sed -n 's/^rustup \([0-9][0-9.]*\).*/\1/p')"
+        echo "rustup $rustup_version"
+        if [ "$(printf '%s\n' 1.28.0 "$rustup_version" | sort -V | head -n 1)" = 1.28.0 ]; then
+          echo "installing with: rustup toolchain install"
+          rustup toolchain install
+        else
+          echo "installing with: rustup show (rustup older than 1.28)"
+          rustup show
+        fi
+        if [ -n "$EXTRA_TARGETS" ]; then
+          # shellcheck disable=SC2086 # a space-separated list, split on purpose
+          rustup target add $EXTRA_TARGETS
+        fi
+        echo "version=$(rustc --version | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+
+    - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      if: inputs.cache == 'true'
+      with:
+        workspaces: core
+
+    # The key carries the rustc version: a toolchain bump rebuilds the
+    # tools with the new compiler rather than restoring the old binaries.
+    - name: Restore pinned cargo tools
+      id: cargo-tools
+      if: inputs.wasm-tools == 'true' && inputs.cache == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/bin/cbindgen
+          ~/.cargo/bin/wasm-pack
+        key: cargo-tools-${{ runner.os }}-${{ runner.arch }}-rustc-${{ steps.rust.outputs.version }}-cbindgen-${{ steps.pins.outputs.cbindgen }}-wasm-pack-${{ steps.pins.outputs.wasm-pack }}
+
+    - name: Install pinned cargo tools
+      if: inputs.wasm-tools == 'true' && steps.cargo-tools.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        CBINDGEN_VERSION: ${{ steps.pins.outputs.cbindgen }}
+        WASM_PACK_VERSION: ${{ steps.pins.outputs.wasm-pack }}
+      run: |
+        cargo install cbindgen --version "$CBINDGEN_VERSION" --locked
+        cargo install wasm-pack --version "$WASM_PACK_VERSION" --locked
+
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      if: inputs.node == 'true'
+      with:
+        node-version: 22
+        # Never an npm cache, so a tag run restores nothing from setup-node
+        # either, whatever a package.json later declares.
+        package-manager-cache: false
+
+    - name: Cache Remotion's Chrome Headless Shell
+      if: inputs.remotion-cache == 'true' && inputs.cache == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        # Remotion resolves its download cache from the cwd of the process
+        # that runs it: the still test renders in-process from npm test's
+        # cwd, packages/brightfx-remotion, so the cache lands there, not at
+        # the workspace root.
+        path: packages/brightfx-remotion/node_modules/.remotion
+        key: remotion-chrome-${{ runner.os }}-${{ hashFiles('packages/package-lock.json') }}
+
+    - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      if: inputs.dotnet == 'true'
+      with:
+        dotnet-version: 9.0.x
+
+    - name: Toolchain versions
+      shell: bash
+      env:
+        WASM_TOOLS: ${{ inputs.wasm-tools }}
+        NODE: ${{ inputs.node }}
+        DOTNET: ${{ inputs.dotnet }}
+      run: |
+        rustc --version
+        cargo --version
+        rustup target list --installed
+        if [ "$WASM_TOOLS" = true ]; then
+          cbindgen --version
+          wasm-pack --version
+        fi
+        if [ "$NODE" = true ]; then node --version; fi
+        if [ "$DOTNET" = true ]; then dotnet --version; fi
+        if [ "$RUNNER_OS" = macOS ]; then swift --version; fi

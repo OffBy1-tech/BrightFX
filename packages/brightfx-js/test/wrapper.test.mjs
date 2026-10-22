@@ -9,6 +9,9 @@ import { spawnSync } from "node:child_process";
 
 import { BrightFX, unpremultiply } from "../dist/index.js";
 import { wasmMemory } from "../wasm/brightfx_wasm.js";
+// Outside the package's `files`, so never shipped: the fixture replay the
+// core's Node harness and the release consumer smoke also use.
+import { drive, assertBufferClose } from "../../../core/harnesses/node/replay.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtures = join(here, "..", "..", "..", "core", "fixtures");
@@ -22,21 +25,6 @@ const seekForward = JSON.parse(read("ffi-seek-forward.expected.json"));
 const cueExpected = JSON.parse(read("tracks-cues.expected.json")).jobs;
 
 const engine = await BrightFX.init(readFileSync(join(here, "..", "wasm", "brightfx_wasm_bg.wasm")));
-
-function drive(sim, { emitterFrames, burstFrame, dt }) {
-  emitterFrames.forEach((e, i) => {
-    sim.setEmitter(e.x, e.y, e.vx, e.vy, true);
-    if (i === burstFrame) sim.triggerBurst();
-    sim.advance(dt);
-  });
-}
-
-function assertClose(actual, expected, tolerance, label) {
-  assert.equal(actual.length, expected.length, `${label}: length`);
-  for (let i = 0; i < actual.length; i++) {
-    assert.ok(Math.abs(actual[i] - expected[i]) <= tolerance, `${label}: float ${i} got ${actual[i]}, expected ${expected[i]}`);
-  }
-}
 
 test("setConfig returns the envelope for objects and strings", () => {
   const sim = engine.create(1);
@@ -65,7 +53,7 @@ test("particles() reproduces the smoke fixture buffer", () => {
   sim.setConfig(read("ffi-smoke.config.json"));
   drive(sim, smokeExpected);
   assert.equal(sim.particleCount(), smokeExpected.particleCount);
-  assertClose(sim.particles(), smokeExpected.buffer, smokeExpected.tolerance, "buffer");
+  assertBufferClose(sim.particles(), smokeExpected);
   sim.dispose();
 });
 
@@ -85,7 +73,7 @@ test("seek forward matches the recorded forward fixture", () => {
   const sim = engine.create(seekForward.seed);
   sim.setConfig(read("ffi-seek.config.json"));
   for (const t of seekForward.seekTimes) sim.seek(t);
-  assertClose(sim.particles(), seekForward.buffer, seekForward.tolerance, "forward seek");
+  assertBufferClose(sim.particles(), seekForward, "forward seek");
   sim.dispose();
 });
 
