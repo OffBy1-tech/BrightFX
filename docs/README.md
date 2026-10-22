@@ -28,3 +28,4 @@ code and the READMEs are the reference for how things work now
 | [Emitter track pre-roll](plans/2026-10-09-emitter-track-preroll.md) | plan | shipped with PR #36 |
 | [Sub-stepping advance](specs/2026-10-17-advance-substep-design.md) | spec | shipped with PR #50 |
 | [Sub-stepping advance](plans/2026-10-17-advance-substep.md) | plan | shipped with PR #50 |
+| [Phase 0 release workflow](plans/2026-10-21-phase-0-release-workflow.md) | plan | shipped with PR #55 (`v0.4.0`) |
